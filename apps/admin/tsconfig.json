@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"],
+      "@packages/shared": ["../../packages/shared/src/index.ts"],
+      "@packages/shared/*": ["../../packages/shared/src/*"],
+      "@packages/design-system": ["../../packages/design-system/index.ts"],
+      "@packages/design-system/*": ["../../packages/design-system/*"]
+    }
+  },
+  "include": ["src"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

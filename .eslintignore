@@ -1,0 +1,29 @@
+# Build outputs
+**/dist
+**/build
+**/.next
+**/out
+
+# Dependencies
+**/node_modules
+
+# Cache
+**/.turbo
+**/.cache
+**/coverage
+
+# Config files
+*.config.js
+*.config.mjs
+*.config.ts
+
+# Generated files
+**/*.d.ts
+**/generated
+
+# IDE
+.vscode
+.idea
+
+# Logs
+*.log

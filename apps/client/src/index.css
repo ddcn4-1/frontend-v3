@@ -1,0 +1,7 @@
+@import "tailwindcss";
+@import "../../../packages/design-system/styles/theme.css";
+
+/* NOSONAR - Tailwind CSS v4 @source directive is valid */
+@source "../**/*.{ts,tsx}";
+/* NOSONAR - Tailwind CSS v4 @source directive is valid */
+@source "../../../packages/design-system/**/*.{ts,tsx}";

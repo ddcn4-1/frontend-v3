@@ -1,0 +1,512 @@
+name: PR Quality Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - '**'
+
+jobs:
+  quality-gate:
+    name: Code Quality Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Stage 1: Code Formatting Check (Prettier)
+      - name: Check code formatting
+        id: format_check
+        run: |
+          echo "Running Prettier format check..."
+
+          set +e
+          pnpm format:check
+          format_exit_code=$?
+          set -e
+
+          echo "format_exit_code=$format_exit_code" >> $GITHUB_OUTPUT
+
+          if [ "$format_exit_code" -ne 0 ]; then
+            echo "Format check failed"
+            echo "format_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "Format check passed"
+            echo "format_failed=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # Stage 2: ESLint Analysis
+      - name: Run ESLint
+        id: lint
+        run: |
+          echo "Running ESLint analysis..."
+
+          # Create centralized reports directory
+          mkdir -p reports/lint/{apps,packages}
+
+          set +e
+          pnpm lint -- --format json --output-file lint-report.json
+          lint_exit_code=$?
+          set -e
+
+          # Move individual reports to centralized location
+          find apps -name lint-report.json -type f 2>/dev/null | while read file; do
+            app_name=$(echo "$file" | cut -d'/' -f2)
+            mv "$file" "reports/lint/apps/${app_name}-report.json"
+          done
+
+          find packages -name lint-report.json -type f 2>/dev/null | while read file; do
+            pkg_name=$(echo "$file" | cut -d'/' -f2)
+            mv "$file" "reports/lint/packages/${pkg_name}-report.json"
+          done
+
+          # Combine all reports
+          report_files=$(find reports/lint -name "*-report.json" -type f 2>/dev/null || echo "")
+
+          blocker_count=0
+          critical_count=0
+          warning_count=0
+
+          if [ -n "$report_files" ]; then
+            jq -s 'flatten' $report_files > reports/lint/combined-results.json 2>/dev/null || echo "[]" > reports/lint/combined-results.json
+
+            # Blocker: Security-related errors
+            blocker_count=$(jq '[.[] | .messages[]? | select(.severity == 2 and (.ruleId | tostring | startswith("security/")))] | length' reports/lint/combined-results.json 2>/dev/null || echo 0)
+
+            # Critical: Other errors
+            critical_count=$(jq '[.[] | .messages[]? | select(.severity == 2 and (.ruleId | tostring | startswith("security/") | not))] | length' reports/lint/combined-results.json 2>/dev/null || echo 0)
+
+            # Warning: Warnings
+            warning_count=$(jq '[.[] | .messages[]? | select(.severity == 1)] | length' reports/lint/combined-results.json 2>/dev/null || echo 0)
+          fi
+
+          echo "Lint results: Blocker=$blocker_count, Critical=$critical_count, Warning=$warning_count"
+
+          echo "blocker_count=$blocker_count" >> $GITHUB_OUTPUT
+          echo "critical_count=$critical_count" >> $GITHUB_OUTPUT
+          echo "warning_count=$warning_count" >> $GITHUB_OUTPUT
+          echo "lint_exit_code=$lint_exit_code" >> $GITHUB_OUTPUT
+
+          if [ "$blocker_count" -gt 0 ]; then
+            lint_status="blocker"
+          elif [ "$critical_count" -gt 0 ]; then
+            lint_status="critical"
+          elif [ "$warning_count" -gt 0 ]; then
+            lint_status="warning"
+          else
+            lint_status="passed"
+          fi
+
+          echo "lint_status=$lint_status" >> $GITHUB_OUTPUT
+
+          if [ "$lint_status" = "blocker" ] || [ "$lint_status" = "critical" ]; then
+            echo "Lint check failed (status: $lint_status)"
+            echo "lint_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "Lint check passed (status: $lint_status)"
+            echo "lint_failed=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # Stage 3: FSD Architecture Compliance
+      - name: Run FSD architecture check
+        id: fsd
+        run: |
+          echo "Running Steiger FSD architecture checks..."
+
+          mkdir -p reports/fsd
+
+          set +e
+          pnpm fsd:check > reports/fsd/fsd-check.log 2>&1
+          fsd_exit_code=$?
+          set -e
+
+          if [ "$fsd_exit_code" -ne 0 ]; then
+            echo "FSD architecture violations detected"
+            echo "fsd_failed=true" >> $GITHUB_OUTPUT
+            echo "---- Steiger output ----"
+            cat reports/fsd/fsd-check.log || true
+            echo "------------------------"
+          else
+            echo "FSD architecture check passed"
+            echo "fsd_failed=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # Stage 4: Security Audit (pnpm audit)
+      - name: Run security audit
+        id: security
+        run: |
+          echo "Running security audit..."
+
+          # Create centralized reports directory
+          mkdir -p reports/security
+
+          pnpm audit --audit-level=moderate --json > reports/security/audit-results.json 2>&1 || true
+
+          # Initialize vulnerability counts
+          critical_count=0
+          high_count=0
+          moderate_count=0
+          low_count=0
+
+          # Check if audit-results.json exists and is not empty
+          if [ ! -s reports/security/audit-results.json ]; then
+            echo "No audit results generated"
+            echo "security_failed=false" >> $GITHUB_OUTPUT
+            echo "VULN_DETAILS=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Parse vulnerability counts from pnpm audit v9 format
+          if jq -e '.vulnerabilities' reports/security/audit-results.json > /dev/null 2>&1; then
+            critical_count=$(jq -r '.vulnerabilities.critical // 0' reports/security/audit-results.json)
+            high_count=$(jq -r '.vulnerabilities.high // 0' reports/security/audit-results.json)
+            moderate_count=$(jq -r '.vulnerabilities.moderate // 0' reports/security/audit-results.json)
+            low_count=$(jq -r '.vulnerabilities.low // 0' reports/security/audit-results.json)
+          fi
+
+          total_vulns=$((critical_count + high_count + moderate_count + low_count))
+
+          echo "Vulnerabilities found: Critical=$critical_count, High=$high_count, Moderate=$moderate_count, Low=$low_count"
+
+          if [ "$total_vulns" -gt 0 ]; then
+            echo "Security vulnerabilities detected"
+
+            # Extract vulnerability details
+            vuln_details_file=$(mktemp)
+
+            if jq -e '.advisories' reports/security/audit-results.json > /dev/null 2>&1; then
+              jq -r '.advisories[] | "- **\(.title)** (\(.severity))\n  - Package: \(.module_name)\n  - Vulnerable versions: \(.vulnerable_versions)\n  - Patched versions: \(.patched_versions // "None")\n  - Recommendation: \(.recommendation // "Update to patched version")\n"' reports/security/audit-results.json > "$vuln_details_file" 2>/dev/null || echo "Cannot parse vulnerability details" > "$vuln_details_file"
+            else
+              echo "Vulnerabilities detected but details are unavailable. Run \`pnpm audit\` locally for more information." > "$vuln_details_file"
+            fi
+
+            # Set output with vulnerability details
+            {
+              echo "VULN_DETAILS<<AUDIT_EOF"
+              cat "$vuln_details_file"
+              echo "AUDIT_EOF"
+            } >> $GITHUB_OUTPUT
+
+            rm -f "$vuln_details_file"
+
+            echo "security_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No security vulnerabilities found"
+            echo "VULN_DETAILS=" >> $GITHUB_OUTPUT
+            echo "security_failed=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # Stage 5: TypeScript Type Checking
+      - name: Run TypeScript type check
+        id: typecheck
+        run: |
+          echo "Running TypeScript type check..."
+
+          set +e
+          pnpm type-check
+          typecheck_exit_code=$?
+          set -e
+
+          if [ "$typecheck_exit_code" -ne 0 ]; then
+            echo "TypeScript type check failed"
+            echo "typecheck_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "TypeScript type check passed"
+            echo "typecheck_failed=false" >> $GITHUB_OUTPUT
+          fi
+        continue-on-error: true
+
+      # Stage 6: Lockfile Integrity
+      - name: Check lockfile changes
+        id: lockfile
+        run: |
+          echo "Checking lockfile changes..."
+
+          if git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E 'pnpm-lock.yaml'; then
+            echo "lockfile_changed=true" >> $GITHUB_OUTPUT
+            echo "Lockfile changed, will verify integrity"
+          else
+            echo "lockfile_changed=false" >> $GITHUB_OUTPUT
+            echo "No lockfile changes detected"
+          fi
+
+      - name: Verify lockfile integrity
+        if: steps.lockfile.outputs.lockfile_changed == 'true'
+        run: |
+          echo "Verifying pnpm lockfile integrity..."
+          pnpm install --frozen-lockfile --prefer-offline
+
+      # Quality Gate Report Summary
+      - name: Generate Quality Gate Report
+        if: always()
+        run: |
+          echo "## PR Quality Gate Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Validation Results Table
+          echo "### Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Check | Status | Details |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|--------|---------|" >> $GITHUB_STEP_SUMMARY
+
+          # Format Check
+          if [ "${{ steps.format_check.outputs.format_failed }}" == "true" ]; then
+            echo "| 1 | Code Formatting | \`[FAIL]\` | Formatting errors detected |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 1 | Code Formatting | \`[PASS]\` | All files properly formatted |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Lint Check
+          lint_status="${{ steps.lint.outputs.lint_status }}"
+          blocker_count="${{ steps.lint.outputs.blocker_count }}"
+          critical_count="${{ steps.lint.outputs.critical_count }}"
+          warning_count="${{ steps.lint.outputs.warning_count }}"
+
+          if [ "$lint_status" = "blocker" ]; then
+            echo "| 2 | ESLint Analysis | \`[FAIL]\` | ${blocker_count} blocker issues (security) |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$lint_status" = "critical" ]; then
+            echo "| 2 | ESLint Analysis | \`[FAIL]\` | ${critical_count} critical issues |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$lint_status" = "warning" ]; then
+            echo "| 2 | ESLint Analysis | \`[WARN]\` | ${warning_count} warnings (non-blocking) |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 2 | ESLint Analysis | \`[PASS]\` | No issues detected |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # FSD Architecture Check
+          if [ "${{ steps.fsd.outputs.fsd_failed }}" == "true" ]; then
+            echo "| 3 | FSD Architecture | \`[FAIL]\` | Steiger layer violations detected |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 3 | FSD Architecture | \`[PASS]\` | No layer violations |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Security Check
+          if [ "${{ steps.security.outputs.security_failed }}" == "true" ]; then
+            echo "| 4 | Security Audit | \`[FAIL]\` | Vulnerabilities detected |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 4 | Security Audit | \`[PASS]\` | No vulnerabilities found |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # TypeScript Check
+          if [ "${{ steps.typecheck.outputs.typecheck_failed }}" == "true" ]; then
+            echo "| 5 | TypeScript | \`[FAIL]\` | Type errors found |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 5 | TypeScript | \`[PASS]\` | Type checking passed |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Lockfile Check
+          if [ "${{ steps.lockfile.outputs.lockfile_changed }}" == "true" ]; then
+            echo "| 6 | Lockfile Integrity | \`[PASS]\` | Verified |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| 6 | Lockfile Integrity | \`[PASS]\` | No changes |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Security Details (if failed)
+          if [ "${{ steps.security.outputs.security_failed }}" == "true" ]; then
+            echo "### Security Vulnerability Details" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "${{ steps.security.outputs.VULN_DETAILS }}" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          # Final Status
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.format_check.outputs.format_failed }}" == "true" ] || \
+             [ "$lint_status" = "blocker" ] || \
+             [ "$lint_status" = "critical" ] || \
+             [ "${{ steps.fsd.outputs.fsd_failed }}" == "true" ] || \
+             [ "${{ steps.security.outputs.security_failed }}" == "true" ] || \
+             [ "${{ steps.typecheck.outputs.typecheck_failed }}" == "true" ]; then
+            echo "### Status: FAILED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Required Actions:**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            if [ "${{ steps.format_check.outputs.format_failed }}" == "true" ]; then
+              echo "- Run \`pnpm format\` to fix formatting issues" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            if [ "$lint_status" = "blocker" ] || [ "$lint_status" = "critical" ]; then
+              echo "- Run \`pnpm lint\` to identify issues" >> $GITHUB_STEP_SUMMARY
+              echo "- Run \`pnpm lint:fix\` to auto-fix correctable issues" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            if [ "${{ steps.fsd.outputs.fsd_failed }}" == "true" ]; then
+              echo "- Run \`pnpm fsd:check\` to review architecture violations" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            if [ "${{ steps.security.outputs.security_failed }}" == "true" ]; then
+              echo "- Run \`pnpm audit fix\` to resolve vulnerabilities" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            if [ "${{ steps.typecheck.outputs.typecheck_failed }}" == "true" ]; then
+              echo "- Run \`pnpm type-check\` to identify type errors" >> $GITHUB_STEP_SUMMARY
+            fi
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Quick Check:**" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+            echo "pnpm quality:check" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### Status: PASSED" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "All quality checks passed. This PR is ready for review and merge." >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Fail the workflow if quality gate did not pass
+      - name: Enforce quality gate
+        if: |
+          steps.format_check.outputs.format_failed == 'true' ||
+          steps.lint.outputs.lint_status == 'blocker' ||
+          steps.lint.outputs.lint_status == 'critical' ||
+          steps.fsd.outputs.fsd_failed == 'true' ||
+          steps.security.outputs.security_failed == 'true' ||
+          steps.typecheck.outputs.typecheck_failed == 'true'
+        run: |
+          echo "Quality gate failed. Please review and fix the issues above."
+          exit 1
+
+      # PR Comment on Failure
+      - name: Post Failure Comment
+        if: failure()
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          script: |
+            let output = `## Quality Gate Failed\n\n`;
+            output += `The following checks did not pass. Please review and fix the issues before merging.\n\n`;
+
+            output += `### Failed Checks\n\n`;
+
+            if (process.env.FORMAT_FAILED === 'true') {
+              output += `**Code Formatting**\n`;
+              output += `- Status: \`[FAIL]\`\n`;
+              output += `- Action: Run \`pnpm format\` to auto-fix formatting issues\n\n`;
+            }
+
+            const lintStatus = process.env.LINT_STATUS;
+            const blockerCount = Number(process.env.LINT_BLOCKERS || 0);
+            const criticalCount = Number(process.env.LINT_CRITICALS || 0);
+
+            if (lintStatus === 'blocker' || lintStatus === 'critical') {
+              const levelLabel = lintStatus === 'blocker' ? 'Blocker (Security)' : 'Critical';
+              const issueCount = lintStatus === 'blocker' ? blockerCount : criticalCount;
+              output += `**ESLint Analysis**\n`;
+              output += `- Status: \`[FAIL]\`\n`;
+              output += `- Issues: ${issueCount} ${levelLabel} issues detected\n`;
+              output += `- Action: Run \`pnpm lint\` to view details\n`;
+              output += `- Auto-fix: Run \`pnpm lint:fix\` for correctable issues\n\n`;
+            }
+
+            if (process.env.SECURITY_FAILED === 'true') {
+              output += `**Security Audit**\n`;
+              output += `- Status: \`[FAIL]\`\n`;
+              const vulnDetails = process.env.VULN_DETAILS;
+              if (vulnDetails) {
+                output += `- Vulnerabilities:\n\n${vulnDetails}\n\n`;
+                output += `- Action: Run \`pnpm audit fix\` to resolve vulnerabilities\n\n`;
+              } else {
+                output += `- Action: Run \`pnpm audit\` locally for details\n\n`;
+              }
+            }
+
+            if (process.env.FSD_FAILED === 'true') {
+              output += `**FSD Architecture Compliance**\n`;
+              output += `- Status: \`[FAIL]\`\n`;
+              output += `- Action: Run \`pnpm fsd:check\` and inspect \`reports/fsd/fsd-check.log\`\n\n`;
+            }
+
+            if (process.env.TYPECHECK_FAILED === 'true') {
+              output += `**TypeScript Type Checking**\n`;
+              output += `- Status: \`[FAIL]\`\n`;
+              output += `- Action: Run \`pnpm type-check\` to identify type errors\n\n`;
+            }
+
+            output += `---\n\n`;
+            output += `### Quick Fix\n\n`;
+            output += `Run all checks locally:\n\n`;
+            output += `\`\`\`bash\npnpm quality:check\n\`\`\``;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            });
+        env:
+          FORMAT_FAILED: ${{ steps.format_check.outputs.format_failed }}
+          LINT_STATUS: ${{ steps.lint.outputs.lint_status }}
+          LINT_BLOCKERS: ${{ steps.lint.outputs.blocker_count }}
+          LINT_CRITICALS: ${{ steps.lint.outputs.critical_count }}
+          SECURITY_FAILED: ${{ steps.security.outputs.security_failed }}
+          FSD_FAILED: ${{ steps.fsd.outputs.fsd_failed }}
+          TYPECHECK_FAILED: ${{ steps.typecheck.outputs.typecheck_failed }}
+          VULN_DETAILS: ${{ steps.security.outputs.VULN_DETAILS }}
+
+  # Build Verification (runs after quality gate passes)
+  build-verification:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    needs: quality-gate
+    timeout-minutes: 15
+
+    strategy:
+      matrix:
+        app: [accounts, client, admin]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build ${{ matrix.app }}
+        run: |
+          echo "Building ${{ matrix.app }} app..."
+          pnpm --filter @apps/${{ matrix.app }} build
+
+      - name: Verify build output
+        run: |
+          if [ -d "apps/${{ matrix.app }}/dist" ]; then
+            echo "${{ matrix.app }} build succeeded"
+          else
+            echo "${{ matrix.app }} build failed - dist folder not found"
+            exit 1
+          fi

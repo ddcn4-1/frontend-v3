@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "moduleResolution": "bundler",
+    "types": ["vite/client", "node"],
+    "allowJs": false,
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "jsx": "react-jsx"
+  }
+}

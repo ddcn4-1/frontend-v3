@@ -1,0 +1,38 @@
+node_modules
+.vite
+.env
+.env.local
+.env.development
+.env.production
+build/
+.vscode/
+
+# IDE & local tooling
+.idea/
+.claude/
+
+# SSL Certificates
+certs/*.pem
+certs/*.key
+
+# Turbo
+.turbo/
+
+# pnpm
+.pnpm-store/
+
+# Vite
+*.timestamp-*.mjs
+
+# Build artifacts
+**/dist/
+**/dist/**/*.js
+**/dist/**/*.js.map
+**/dist/**/*.css
+
+# Generated reports
+reports/
+
+# SonarQube
+.scannerwork/
+.sonar/

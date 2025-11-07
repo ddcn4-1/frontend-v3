@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+@theme {
+  /* Typography */
+  --font-sans: "Inter Variable", "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  /* Modern Minimal Color Palette - OKLCH */
+  /* Primary - Refined Blue */
+  --color-primary-50: oklch(0.98 0.008 250);
+  --color-primary-100: oklch(0.95 0.015 250);
+  --color-primary-200: oklch(0.90 0.030 250);
+  --color-primary-300: oklch(0.82 0.055 250);
+  --color-primary-400: oklch(0.70 0.095 250);
+  --color-primary-500: oklch(0.58 0.135 250);
+  --color-primary: oklch(0.58 0.135 250);
+  --color-primary-600: oklch(0.48 0.125 250);
+  --color-primary-700: oklch(0.38 0.095 250);
+  --color-primary-800: oklch(0.28 0.065 250);
+  --color-primary-900: oklch(0.20 0.040 250);
+  --color-primary-950: oklch(0.12 0.020 250);
+  --color-primary-foreground: oklch(1 0 0);
+
+  /* Secondary - Subtle Gray */
+  --color-secondary: oklch(0.94 0 0);
+  --color-secondary-foreground: oklch(0.16 0 0);
+
+  /* Destructive - Error Red */
+  --color-destructive: oklch(0.62 0.18 25);
+  --color-destructive-foreground: oklch(1 0 0);
+
+  /* Neutral - Clean Grays */
+  --color-neutral-50: oklch(0.99 0 0);
+  --color-neutral-100: oklch(0.97 0 0);
+  --color-neutral-200: oklch(0.94 0 0);
+  --color-neutral-300: oklch(0.88 0 0);
+  --color-neutral-400: oklch(0.72 0 0);
+  --color-neutral-500: oklch(0.58 0 0);
+  --color-neutral-600: oklch(0.46 0 0);
+  --color-neutral-700: oklch(0.35 0 0);
+  --color-neutral-800: oklch(0.24 0 0);
+  --color-neutral-900: oklch(0.16 0 0);
+  --color-neutral-950: oklch(0.09 0 0);
+
+  /* Semantic Colors */
+  --color-success: oklch(0.68 0.14 150);
+  --color-warning: oklch(0.78 0.13 80);
+  --color-error: oklch(0.62 0.18 25);
+  --color-info: oklch(0.65 0.12 240);
+
+  /* UI Colors - Modern Minimal */
+  --color-background: oklch(1 0 0);
+  --color-foreground: oklch(0.16 0 0);
+  --color-card: oklch(1 0 0);
+  --color-card-foreground: oklch(0.16 0 0);
+  --color-popover: oklch(1 0 0);
+  --color-popover-foreground: oklch(0.16 0 0);
+  --color-muted: oklch(0.97 0 0);
+  --color-muted-foreground: oklch(0.46 0 0);
+  --color-accent: oklch(0.97 0 0);
+  --color-accent-foreground: oklch(0.16 0 0);
+  --color-border: oklch(0.90 0 0);
+  --color-input: oklch(0.90 0 0);
+  --color-ring: oklch(0.58 0.135 250);
+
+  /* Border Radius - Modern Minimal */
+  --radius-none: 0;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-full: 9999px;
+
+  /* Shadows - Subtle Modern */
+  --shadow-xs: 0 1px 2px 0 oklch(0 0 0 / 0.04);
+  --shadow-sm: 0 1px 3px 0 oklch(0 0 0 / 0.08), 0 1px 2px -1px oklch(0 0 0 / 0.08);
+  --shadow-md: 0 4px 6px -1px oklch(0 0 0 / 0.08), 0 2px 4px -2px oklch(0 0 0 / 0.08);
+  --shadow-lg: 0 10px 15px -3px oklch(0 0 0 / 0.08), 0 4px 6px -4px oklch(0 0 0 / 0.08);
+  --shadow-xl: 0 20px 25px -5px oklch(0 0 0 / 0.08), 0 8px 10px -6px oklch(0 0 0 / 0.08);
+  --shadow-2xl: 0 25px 50px -12px oklch(0 0 0 / 0.20);
+
+  /* Animation Timing */
+  --ease-linear: linear;
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 350ms;
+}
+
+/* Global Styles - Modern Minimal */
+* {
+  border-color: var(--color-border);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Focus Ring - Minimal */
+:focus-visible {
+  outline: 2px solid var(--color-ring);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background-color: oklch(0.58 0.135 250 / 0.2);
+  color: var(--color-foreground);
+}

@@ -1,0 +1,56 @@
+{
+  "name": "@packages/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./api": "./src/api/index.ts",
+    "./api/client": "./src/api/client.ts",
+    "./api/endpoints": "./src/api/endpoints/index.ts",
+    "./model": "./src/model/index.ts",
+    "./model/auth": "./src/model/auth/index.ts",
+    "./model/types": "./src/model/types.ts",
+    "./model/common": "./src/model/common/api.ts",
+    "./model/performance": "./src/model/performance/types.ts",
+    "./model/venue": "./src/model/venue/types.ts",
+    "./model/seat": "./src/model/seat/types.ts",
+    "./model/user": "./src/model/user/types.ts",
+    "./model/booking": "./src/model/booking/types.ts",
+    "./model/queue": "./src/model/queue/types.ts",
+    "./model/system": "./src/model/system/types.ts",
+    "./lib": "./src/lib/index.ts",
+    "./lib/auth": "./src/lib/auth/index.ts",
+    "./lib/debug": "./src/lib/debug/index.ts",
+    "./config": "./src/config/index.ts",
+    "./config/api": "./src/config/api.ts",
+    "./config/common": "./src/config/common.ts",
+    "./config/cognito": "./src/config/cognito.ts"
+  },
+  "scripts": {
+    "type-check": "tsc --noEmit",
+    "build": "tsc",
+    "lint": "eslint . --ext ts,tsx"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^20.17.6",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.4",
+    "@typescript-eslint/eslint-plugin": "^8.21.1",
+    "@typescript-eslint/parser": "^8.21.1",
+    "eslint": "^9.17.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-security": "^3.0.1",
+    "eslint-plugin-sonarjs": "^3.0.5",
+    "typescript": "^5.6.3",
+    "vite": "7.1.11"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

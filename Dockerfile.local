@@ -1,0 +1,40 @@
+# Development Dockerfile for Frontend Monorepo
+FROM node:22.20.0-alpine3.22 
+
+WORKDIR /app
+
+# Install system dependencies for native modules
+RUN apk add --no-cache libc6-compat
+
+# Enable corepack
+RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
+
+# Copy workspace config and package files (better caching)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json .npmrc tsconfig.base.json ./
+
+# Create directory structure for apps and packages
+RUN mkdir -p apps/client apps/admin apps/accounts packages/design-system packages/shared
+
+# Copy package.json files maintaining structure
+COPY apps/client/package.json ./apps/client/
+COPY apps/admin/package.json ./apps/admin/
+COPY apps/accounts/package.json ./apps/accounts/
+COPY packages/design-system/package.json ./packages/design-system/
+COPY packages/shared/package.json ./packages/shared/
+
+# Install dependencies (Linux native modules)
+RUN pnpm install --frozen-lockfile
+
+# Copy all workspace source code
+COPY apps ./apps
+COPY packages ./packages
+
+# Expose all dev server ports
+EXPOSE 3000 3001 3002
+
+# Health check for development
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000 || exit 1
+
+# Start all dev servers in parallel
+CMD ["pnpm", "dev"]

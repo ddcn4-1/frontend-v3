@@ -1,0 +1,27 @@
+# Dependencies
+node_modules
+**/node_modules
+*/node_modules
+apps/*/node_modules
+packages/*/node_modules
+
+# Build outputs
+dist
+**/dist
+*/dist
+
+build
+*.log
+.turbo
+
+# Development files
+.git
+.env
+.env.local
+.DS_Store
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
