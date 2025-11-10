@@ -4,8 +4,12 @@ on:
   push:
     branches: [main]
 
+# Test env
+# 실제 사용하는 bucket name에 맞게 변경해주세요.
 env:
-  BUCKET_NAME: "ddcn41v1-frontend"
+  CLIENT_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-client"
+  ADMIN_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-admin"
+  ACCOUNTS_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-accounts"
   AWS_REGION: ap-northeast-2
 
 permissions:
@@ -15,30 +19,60 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [22]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+        
+      - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
-          node-version: 18
-          cache: "npm"
-          cache-dependency-path: package.json
+          node-version: ${{ matrix.node-version }}
+          cache: "pnpm"
 
-      - name: Install
-        run: npm install
+      - name: Install dependencies
+        run: pnpm install
 
-      - name: Build
-        run: npm run build
+      - name: build client
+        run: pnpm run build
+        working-directory: ./apps/client
 
-      - name: Build artifact upload
+      - name: build admin
+        run: pnpm run build
+        working-directory: ./apps/admin
+        
+      - name: build accounts
+        run: pnpm run build
+        working-directory: ./apps/accounts
+
+      - name: Build client artifact upload
         uses: actions/upload-artifact@v4
         with:
-          name: build-frontend-files
-          path: build/
+          name: build-client-frontend-files
+          path: ./apps/client/dist
           retention-days: 1
-      
+          
+      - name: Build admin artifact upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-admin-frontend-files
+          path: ./apps/admin/dist
+          retention-days: 1
+          
+      - name: Build accounts artifact upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-accounts-frontend-files
+          path: ./apps/accounts/dist
+          retention-days: 1
+          
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -46,11 +80,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build artifact download
+      - name: Build client artifact download
         uses: actions/download-artifact@v4
         with:
-          name: build-frontend-files
-          path: build/
+          name: build-client-frontend-files
+          path: build/client
+          
+      - name: Build admin artifact download
+        uses: actions/download-artifact@v4
+        with:
+          name: build-admin-frontend-files
+          path: build/admin
+          
+      - name: Build accounts artifact download
+        uses: actions/download-artifact@v4
+        with:
+          name: build-accounts-frontend-files
+          path: build/accounts
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -58,7 +104,15 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: S3 Upload
+      - name: S3 client Upload
         run: |
-          aws s3 sync ./build/ s3://${{ env.BUCKET_NAME }} \
+          aws s3 sync ./build/client s3://${{ env.CLIENT_BUCKET_NAME }} \
+            --delete
+      - name: S3 admin Upload
+        run: |
+          aws s3 sync ./build/admin s3://${{ env.ADMIN_BUCKET_NAME }} \
+            --delete
+      - name: S3 accounts Upload
+        run: |
+          aws s3 sync ./build/accounts s3://${{ env.ACCOUNTS_BUCKET_NAME }} \
             --delete
