@@ -14,6 +14,9 @@
           <value>gocd/pipelines/*.gocd.yaml</value>
         </property>
       </configuration>
+      <rules>
+        <allow action="refer" type="pipeline_group">defaultGroup</allow>
+      </rules>
     </config-repo>
   </config-repos>
   <pipelines group="defaultGroup">
