@@ -35,11 +35,18 @@ services:
     container_name: gocd-agent
     platform: linux/arm64  # M1/M2 Mac (Apple Silicon)
     environment:
+      # GoCD Agent Configuration
       - GO_SERVER_URL=http://gocd-server:8153/go
       - AGENT_AUTO_REGISTER_KEY=auto-register-key
       - AGENT_AUTO_REGISTER_RESOURCES=nodejs,pnpm
       - AGENT_AUTO_REGISTER_ENVIRONMENTS=development
       - AGENT_BOOTSTRAPPER_JVM_ARGS=-Xms128m -Xmx256m
+
+      # AWS Credentials (로컬 테스트용)
+      # 실제 값은 .env 파일이나 호스트 환경변수에서 주입
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_DEFAULT_REGION=ap-northeast-2
     volumes:
       - gocd-agent-data:/godata
       # Mount project for build access
