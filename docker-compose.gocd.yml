@@ -24,9 +24,14 @@ services:
       retries: 5
       start_period: 90s
 
-  # GoCD Agent
+  # GoCD Agent (Custom image with Node.js & pnpm)
   gocd-agent:
-    image: gocd/gocd-agent-ubuntu-22.04:v24.4.0
+    build:
+      context: ./gocd
+      dockerfile: Dockerfile.agent
+      platforms:
+        - linux/arm64
+    image: gocd-agent-nodejs:latest
     container_name: gocd-agent
     platform: linux/arm64  # M1/M2 Mac (Apple Silicon)
     environment:
