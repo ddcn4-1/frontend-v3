@@ -1,0 +1,74 @@
+---
+# GoCD Agent ConfigMap for auto-registration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gocd-agent-config
+  namespace: gocd
+data:
+  auto-register-key: "auto-register-key"
+  agent-resources: "docker,nodejs,pnpm"
+  agent-environments: "development"
+
+---
+# GoCD Agent Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gocd-agent
+  namespace: gocd
+  labels:
+    app: gocd-agent
+spec:
+  replicas: 2  # 2개 agent로 병렬 빌드
+  selector:
+    matchLabels:
+      app: gocd-agent
+  template:
+    metadata:
+      labels:
+        app: gocd-agent
+    spec:
+      containers:
+        - name: gocd-agent
+          image: gocd/gocd-agent-docker-dind:v24.4.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true  # Docker-in-Docker를 위해 필요
+          env:
+            - name: GO_SERVER_URL
+              value: "https://gocd-server:8154/go"
+            - name: AGENT_AUTO_REGISTER_KEY
+              valueFrom:
+                configMapKeyRef:
+                  name: gocd-agent-config
+                  key: auto-register-key
+            - name: AGENT_AUTO_REGISTER_RESOURCES
+              valueFrom:
+                configMapKeyRef:
+                  name: gocd-agent-config
+                  key: agent-resources
+            - name: AGENT_AUTO_REGISTER_ENVIRONMENTS
+              valueFrom:
+                configMapKeyRef:
+                  name: gocd-agent-config
+                  key: agent-environments
+          volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+            - name: gocd-agent-data
+              mountPath: /godata
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: docker-sock
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: gocd-agent-data
+          emptyDir: {}

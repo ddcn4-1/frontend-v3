@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<cruise xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="cruise-config.xsd" schemaVersion="139">
+  <server agentAutoRegisterKey="f7baaa1c-7de9-45d1-a254-faffd2221f3c" webhookSecret="fda41a8d-9376-4f37-a06e-736c630ff5c9" serverId="90c33daf-fd61-400f-8271-7ff2a2edcf38" tokenGenerationKey="66d1ffd6-c3bb-4b7f-b482-c7a304ab3680">
+    <artifacts>
+      <artifactsDir>artifacts</artifactsDir>
+    </artifacts>
+  </server>
+  <config-repos>
+    <config-repo id="frontend-v3" pluginId="yaml.config.plugin">
+      <git url="https://github.com/ddcn4-1/frontend-v3" branch="feat/gocd" username="kimhxsong" encryptedPassword="AES:Bs4jQRceupCd1ERqyH8ZAw==:tdISPWDn3flzw613XW3PGc5LuEo6YiULruXn2Zc21E4WHS4Y2Ef65r0pcEUQEi74" />
+      <configuration>
+        <property>
+          <key>file_pattern</key>
+          <value>gocd/pipelines/*.gocd.yaml</value>
+        </property>
+      </configuration>
+    </config-repo>
+  </config-repos>
+  <pipelines group="defaultGroup">
+    <pipeline name="pipeline-frontend">
+      <materials>
+        <git url="https://github.com/ddcn4-1/frontend-v3" branch="main" username="kimhxsong" encryptedPassword="AES:63Ep1T34+H51HWGF1NDEhg==:TAiPGJd6KVCE+A3BusX4PjC9AotyWhvSe5eloMIjB1iZ3fZBLWSkuaNT444Ewl87" materialName="ddcn41-frontend" />
+      </materials>
+      <stage name="stage-1">
+        <jobs>
+          <job name="gocd-job">
+            <tasks>
+              <exec command="task-1" />
+            </tasks>
+          </job>
+        </jobs>
+      </stage>
+    </pipeline>
+  </pipelines>
+</cruise>

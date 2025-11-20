@@ -1,0 +1,97 @@
+---
+# GoCD Server PersistentVolumeClaim
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gocd-server-pvc
+  namespace: gocd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# GoCD Server Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: gocd-server
+  namespace: gocd
+  labels:
+    app: gocd-server
+spec:
+  type: NodePort
+  ports:
+    - name: http
+      port: 8153
+      targetPort: 8153
+      nodePort: 30153
+    - name: https
+      port: 8154
+      targetPort: 8154
+      nodePort: 30154
+  selector:
+    app: gocd-server
+
+---
+# GoCD Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gocd-server
+  namespace: gocd
+  labels:
+    app: gocd-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gocd-server
+  template:
+    metadata:
+      labels:
+        app: gocd-server
+    spec:
+      containers:
+        - name: gocd-server
+          image: gocd/gocd-server:v24.4.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8153
+              name: http
+            - containerPort: 8154
+              name: https
+          env:
+            - name: GOCD_SERVER_JVM_OPTS
+              value: "-Xmx2048m -Xms1024m"
+          volumeMounts:
+            - name: gocd-server-data
+              mountPath: /godata
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+          livenessProbe:
+            httpGet:
+              path: /go/api/v1/health
+              port: 8153
+            initialDelaySeconds: 90
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /go/api/v1/health
+              port: 8153
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+      volumes:
+        - name: gocd-server-data
+          persistentVolumeClaim:
+            claimName: gocd-server-pvc

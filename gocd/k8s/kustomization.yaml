@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gocd
+
+resources:
+  - namespace.yaml
+  - gocd-server.yaml
+  - gocd-agent.yaml
+
+commonLabels:
+  app.kubernetes.io/name: gocd
+  app.kubernetes.io/instance: gocd-local
+  app.kubernetes.io/managed-by: kubectl

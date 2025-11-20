@@ -1,0 +1,56 @@
+services:
+  # GoCD Server
+  gocd-server:
+    image: gocd/gocd-server:v24.4.0
+    container_name: gocd-server
+    platform: linux/arm64  # M1/M2 Mac (Apple Silicon)
+    ports:
+      - "8153:8153"  # GoCD Server Web UI
+      - "8154:8154"  # GoCD Server HTTPS
+    environment:
+      - GOCD_SERVER_JVM_OPTS=-Xmx2048m -Xms1024m
+    volumes:
+      - gocd-server-data:/godata
+      - ./gocd/server-config:/godata/config
+      - ./gocd/pipelines:/godata/pipelines
+      # Mount project for build access
+      - .:/workspace:ro
+    networks:
+      - gocd-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8153/go/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # GoCD Agent
+  gocd-agent:
+    image: gocd/gocd-agent-ubuntu-22.04:v24.4.0
+    container_name: gocd-agent
+    platform: linux/arm64  # M1/M2 Mac (Apple Silicon)
+    environment:
+      - GO_SERVER_URL=http://gocd-server:8153/go
+      - AGENT_AUTO_REGISTER_KEY=auto-register-key
+      - AGENT_AUTO_REGISTER_RESOURCES=nodejs,pnpm
+      - AGENT_AUTO_REGISTER_ENVIRONMENTS=development
+      - AGENT_BOOTSTRAPPER_JVM_ARGS=-Xms128m -Xmx256m
+    volumes:
+      - gocd-agent-data:/godata
+      # Mount project for build access
+      - .:/workspace
+    networks:
+      - gocd-network
+    depends_on:
+      gocd-server:
+        condition: service_healthy
+
+volumes:
+  gocd-server-data:
+    driver: local
+  gocd-agent-data:
+    driver: local
+
+networks:
+  gocd-network:
+    driver: bridge

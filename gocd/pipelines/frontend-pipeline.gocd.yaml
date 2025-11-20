@@ -1,0 +1,206 @@
+format_version: 10
+pipelines:
+  frontend-build-deploy:
+    group: frontend
+    label_template: "${COUNT}"
+    lock_behavior: none
+    display_order: -1
+    materials:
+      git:
+        git: /workspace
+        branch: main
+        auto_update: true
+        whitelist:
+          - "apps/**"
+          - "packages/**"
+          - "pnpm-lock.yaml"
+    stages:
+      # Stage 1: Install Dependencies
+      - install:
+          fetch_materials: true
+          keep_artifacts: false
+          clean_workspace: false
+          approval:
+            type: success
+          jobs:
+            install-deps:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        corepack enable
+                        corepack prepare pnpm@9.15.0 --activate
+                        pnpm install --frozen-lockfile
+              artifacts:
+                - external:
+                    id: node-modules
+                    store_id: workspace
+                    configuration:
+                      options:
+                        Source: /workspace/node_modules
+                        Destination: node_modules
+
+      # Stage 2: Code Quality Check
+      - quality-gate:
+          fetch_materials: true
+          keep_artifacts: false
+          clean_workspace: false
+          approval:
+            type: success
+          jobs:
+            format-check:
+              timeout: 10
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        pnpm format:check
+
+            lint:
+              timeout: 10
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        pnpm lint
+
+            type-check:
+              timeout: 10
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        pnpm type-check
+
+      # Stage 3: Build Applications (Parallel)
+      - build:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+          jobs:
+            build-client:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        pnpm build:client
+              artifacts:
+                - build:
+                    source: apps/client/dist
+                    destination: dist/client
+
+            build-admin:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        pnpm build:admin
+              artifacts:
+                - build:
+                    source: apps/admin/dist
+                    destination: dist/admin
+
+            build-accounts:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        cd /workspace
+                        pnpm build:accounts
+              artifacts:
+                - build:
+                    source: apps/accounts/dist
+                    destination: dist/accounts
+
+      # Stage 4: Deploy (Manual Approval)
+      - deploy:
+          fetch_materials: false
+          keep_artifacts: false
+          clean_workspace: false
+          approval:
+            type: manual  # 수동 승인 필요
+            authorization:
+              users:
+                - admin
+          jobs:
+            deploy-s3:
+              timeout: 10
+              resources:
+                - docker
+              tasks:
+                - fetch:
+                    pipeline: frontend-build-deploy
+                    stage: build
+                    job: build-client
+                    source: dist/client
+                    destination: build
+                - fetch:
+                    pipeline: frontend-build-deploy
+                    stage: build
+                    job: build-admin
+                    source: dist/admin
+                    destination: build
+                - fetch:
+                    pipeline: frontend-build-deploy
+                    stage: build
+                    job: build-accounts
+                    source: dist/accounts
+                    destination: build
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - |
+                        echo "Deploying to S3..."
+                        echo "Client: build/dist/client"
+                        echo "Admin: build/dist/admin"
+                        echo "Accounts: build/dist/accounts"
+                        # AWS CLI 명령어는 실제 배포 시 활성화
+                        # aws s3 sync build/dist/client s3://bucket-name/client --delete

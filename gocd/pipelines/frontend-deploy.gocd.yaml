@@ -1,0 +1,139 @@
+format_version: 10
+pipelines:
+  frontend-deploy:
+    group: defaultGroup
+    label_template: "${COUNT}"
+    lock_behavior: none
+    display_order: -1
+
+    materials:
+      git:
+        git: /workspace
+        branch: main
+        auto_update: true
+        whitelist:
+          - "apps/**"
+          - "packages/**"
+          - "pnpm-lock.yaml"
+
+    environment_variables:
+      CLIENT_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-client"
+      ADMIN_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-admin"
+      ACCOUNTS_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-accounts"
+      AWS_REGION: "ap-northeast-2"
+
+    stages:
+      - build:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          jobs:
+            setup:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - cd /workspace && corepack enable && corepack prepare pnpm@9.15.0 --activate && node --version && pnpm --version
+
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - cd /workspace && pnpm install --frozen-lockfile
+
+            build-client:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - cd /workspace && pnpm install --frozen-lockfile && cd apps/client && pnpm run build
+              artifacts:
+                - build:
+                    source: apps/client/dist
+                    destination: client
+
+            build-admin:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - cd /workspace && pnpm install --frozen-lockfile && cd apps/admin && pnpm run build
+              artifacts:
+                - build:
+                    source: apps/admin/dist
+                    destination: admin
+
+            build-accounts:
+              timeout: 15
+              resources:
+                - nodejs
+                - pnpm
+              tasks:
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - cd /workspace && pnpm install --frozen-lockfile && cd apps/accounts && pnpm run build
+              artifacts:
+                - build:
+                    source: apps/accounts/dist
+                    destination: accounts
+
+      - deploy:
+          fetch_materials: false
+          keep_artifacts: false
+          clean_workspace: false
+          approval:
+            type: success
+
+          jobs:
+            deploy-s3:
+              timeout: 10
+              resources:
+                - nodejs
+
+              tasks:
+                - fetch:
+                    pipeline: frontend-deploy
+                    stage: build
+                    job: build-client
+                    source: client
+                    destination: build
+
+                - fetch:
+                    pipeline: frontend-deploy
+                    stage: build
+                    job: build-admin
+                    source: admin
+                    destination: build
+
+                - fetch:
+                    pipeline: frontend-deploy
+                    stage: build
+                    job: build-accounts
+                    source: accounts
+                    destination: build
+
+                - exec:
+                    command: /bin/sh
+                    arguments:
+                      - -c
+                      - echo "Deploying to S3" && echo "Client bucket ${CLIENT_BUCKET_NAME}" && echo "Admin bucket ${ADMIN_BUCKET_NAME}" && echo "Accounts bucket ${ACCOUNTS_BUCKET_NAME}" && echo "Deployment completed"
