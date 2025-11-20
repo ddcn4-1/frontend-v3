@@ -9,12 +9,8 @@ pipelines:
     materials:
       git:
         git: /workspace
-        branch: main
+        branch: feat/gocd
         auto_update: true
-        whitelist:
-          - "apps/**"
-          - "packages/**"
-          - "pnpm-lock.yaml"
 
     environment_variables:
       CLIENT_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-client"
@@ -39,15 +35,10 @@ pipelines:
               tasks:
                 - exec:
                     command: /bin/sh
+                    working_directory: /workspace
                     arguments:
                       - -c
-                      - cd /workspace && corepack enable && corepack prepare pnpm@9.15.0 --activate && node --version && pnpm --version
-
-                - exec:
-                    command: /bin/sh
-                    arguments:
-                      - -c
-                      - cd /workspace && pnpm install --frozen-lockfile
+                      - corepack enable && corepack prepare pnpm@9.15.0 --activate && pnpm install --frozen-lockfile
 
             build-client:
               timeout: 15
@@ -57,12 +48,13 @@ pipelines:
               tasks:
                 - exec:
                     command: /bin/sh
+                    working_directory: /workspace
                     arguments:
                       - -c
-                      - cd /workspace && pnpm install --frozen-lockfile && cd apps/client && pnpm run build
+                      - corepack enable && corepack prepare pnpm@9.15.0 --activate && pnpm install --frozen-lockfile && cd apps/client && pnpm run build
               artifacts:
                 - build:
-                    source: apps/client/dist
+                    source: /workspace/apps/client/dist
                     destination: client
 
             build-admin:
@@ -73,12 +65,13 @@ pipelines:
               tasks:
                 - exec:
                     command: /bin/sh
+                    working_directory: /workspace
                     arguments:
                       - -c
-                      - cd /workspace && pnpm install --frozen-lockfile && cd apps/admin && pnpm run build
+                      - corepack enable && corepack prepare pnpm@9.15.0 --activate && pnpm install --frozen-lockfile && cd apps/admin && pnpm run build
               artifacts:
                 - build:
-                    source: apps/admin/dist
+                    source: /workspace/apps/admin/dist
                     destination: admin
 
             build-accounts:
@@ -89,12 +82,13 @@ pipelines:
               tasks:
                 - exec:
                     command: /bin/sh
+                    working_directory: /workspace
                     arguments:
                       - -c
-                      - cd /workspace && pnpm install --frozen-lockfile && cd apps/accounts && pnpm run build
+                      - corepack enable && corepack prepare pnpm@9.15.0 --activate && pnpm install --frozen-lockfile && cd apps/accounts && pnpm run build
               artifacts:
                 - build:
-                    source: apps/accounts/dist
+                    source: /workspace/apps/accounts/dist
                     destination: accounts
 
       - deploy:
