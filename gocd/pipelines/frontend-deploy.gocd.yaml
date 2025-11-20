@@ -10,8 +10,6 @@ pipelines:
       git:
         git: https://github.com/ddcn4-1/frontend-v3.git
         branch: feat/gocd
-        username: kimhxsong
-        encrypted_password: "#{GITHUB_TOKEN}"
         destination: repo
 
     environment_variables:
@@ -128,4 +126,18 @@ pipelines:
                     command: /bin/sh
                     arguments:
                       - -c
-                      - echo "Deploying to S3" && echo "Client bucket ${CLIENT_BUCKET_NAME}" && echo "Admin bucket ${ADMIN_BUCKET_NAME}" && echo "Accounts bucket ${ACCOUNTS_BUCKET_NAME}" && echo "Deployment completed"
+                      - |
+                        echo "=== Starting S3 Deployment ==="
+                        echo "Client bucket: ${CLIENT_BUCKET_NAME}"
+                        echo "Admin bucket: ${ADMIN_BUCKET_NAME}"
+                        echo "Accounts bucket: ${ACCOUNTS_BUCKET_NAME}"
+                        echo "AWS Region: ${AWS_REGION}"
+                        echo ""
+                        echo "Deploying client..."
+                        aws s3 sync build/client s3://${CLIENT_BUCKET_NAME} --region ${AWS_REGION}
+                        echo "Deploying admin..."
+                        aws s3 sync build/admin s3://${ADMIN_BUCKET_NAME} --region ${AWS_REGION}
+                        echo "Deploying accounts..."
+                        aws s3 sync build/accounts s3://${ACCOUNTS_BUCKET_NAME} --region ${AWS_REGION}
+                        echo ""
+                        echo "=== Deployment completed ==="
