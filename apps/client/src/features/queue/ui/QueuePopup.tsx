@@ -299,7 +299,6 @@ export function QueuePopup({
     setIsInitializing(true);
 
     try {
-
       console.log('Requesting booking token...');
 
       const checkResponse = await queueService.checkQueueRequirement(
