@@ -1,0 +1,357 @@
+name: Build Performance Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      benchmark_name:
+        description: 'Benchmark name (e.g., baseline, optimized-v1)'
+        required: true
+        default: 'baseline'
+      run_count:
+        description: 'Number of runs for averaging'
+        required: false
+        default: '3'
+
+env:
+  AWS_REGION: ap-northeast-2
+
+permissions:
+  contents: write
+
+jobs:
+  benchmark-info:
+    name: Benchmark Environment Info
+    runs-on: ubuntu-latest
+    outputs:
+      benchmark_id: ${{ steps.info.outputs.benchmark_id }}
+      timestamp: ${{ steps.info.outputs.timestamp }}
+    steps:
+      - name: Generate benchmark metadata
+        id: info
+        run: |
+          BENCHMARK_ID="${{ github.event.inputs.benchmark_name }}-$(date +%Y%m%d-%H%M%S)"
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          echo "benchmark_id=$BENCHMARK_ID" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+          echo "## Benchmark: $BENCHMARK_ID" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Name: ${{ github.event.inputs.benchmark_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Timestamp: $TIMESTAMP" >> $GITHUB_STEP_SUMMARY
+          echo "- Runs: ${{ github.event.inputs.run_count }}" >> $GITHUB_STEP_SUMMARY
+
+  benchmark-build:
+    name: Build Performance Test (Run ${{ matrix.run }})
+    runs-on: ubuntu-latest
+    needs: benchmark-info
+    strategy:
+      matrix:
+        run: [1, 2, 3]
+    steps:
+      - name: Record start time
+        id: start
+        run: |
+          START_TIME=$(date +%s)
+          echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
+          echo "Start: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+
+      - name: Checkout
+        id: checkout
+        run: |
+          STEP_START=$(date +%s)
+          echo "step_start=$STEP_START" >> $GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+
+      - name: Record checkout time
+        id: checkout_end
+        run: |
+          STEP_END=$(date +%s)
+          CHECKOUT_TIME=$((STEP_END - ${{ steps.checkout.outputs.step_start }}))
+          echo "checkout_duration=$CHECKOUT_TIME" >> $GITHUB_OUTPUT
+          echo "Checkout: ${CHECKOUT_TIME}s"
+
+      - name: Install pnpm (Start)
+        id: pnpm_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Record pnpm install time
+        id: pnpm_end
+        run: |
+          STEP_END=$(date +%s)
+          PNPM_TIME=$((STEP_END - ${{ steps.pnpm_start.outputs.step_start }}))
+          echo "pnpm_duration=$PNPM_TIME" >> $GITHUB_OUTPUT
+          echo "pnpm setup: ${PNPM_TIME}s"
+
+      - name: Setup Node.js (Start)
+        id: node_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Record Node.js setup time
+        id: node_end
+        run: |
+          STEP_END=$(date +%s)
+          NODE_TIME=$((STEP_END - ${{ steps.node_start.outputs.step_start }}))
+          echo "node_duration=$NODE_TIME" >> $GITHUB_OUTPUT
+          echo "Node.js setup: ${NODE_TIME}s"
+
+      - name: Install dependencies (Start)
+        id: deps_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Record dependencies install time
+        id: deps_end
+        run: |
+          STEP_END=$(date +%s)
+          DEPS_TIME=$((STEP_END - ${{ steps.deps_start.outputs.step_start }}))
+          echo "deps_duration=$DEPS_TIME" >> $GITHUB_OUTPUT
+          echo "Dependencies: ${DEPS_TIME}s"
+
+      - name: Build client (Start)
+        id: client_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Build client
+        run: pnpm run build
+        working-directory: ./apps/client
+
+      - name: Record client build time
+        id: client_end
+        run: |
+          STEP_END=$(date +%s)
+          CLIENT_TIME=$((STEP_END - ${{ steps.client_start.outputs.step_start }}))
+          echo "client_duration=$CLIENT_TIME" >> $GITHUB_OUTPUT
+          echo "Client build: ${CLIENT_TIME}s"
+
+      - name: Build admin (Start)
+        id: admin_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Build admin
+        run: pnpm run build
+        working-directory: ./apps/admin
+
+      - name: Record admin build time
+        id: admin_end
+        run: |
+          STEP_END=$(date +%s)
+          ADMIN_TIME=$((STEP_END - ${{ steps.admin_start.outputs.step_start }}))
+          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_OUTPUT
+          echo "Admin build: ${ADMIN_TIME}s"
+
+      - name: Build accounts (Start)
+        id: accounts_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Build accounts
+        run: pnpm run build
+        working-directory: ./apps/accounts
+
+      - name: Record accounts build time
+        id: accounts_end
+        run: |
+          STEP_END=$(date +%s)
+          ACCOUNTS_TIME=$((STEP_END - ${{ steps.accounts_start.outputs.step_start }}))
+          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_OUTPUT
+          echo "Accounts build: ${ACCOUNTS_TIME}s"
+
+      - name: Calculate total time and generate report
+        id: summary
+        run: |
+          END_TIME=$(date +%s)
+          TOTAL_TIME=$((END_TIME - ${{ steps.start.outputs.start_time }}))
+
+          CHECKOUT_TIME=${{ steps.checkout_end.outputs.checkout_duration }}
+          PNPM_TIME=${{ steps.pnpm_end.outputs.pnpm_duration }}
+          NODE_TIME=${{ steps.node_end.outputs.node_duration }}
+          DEPS_TIME=${{ steps.deps_end.outputs.deps_duration }}
+          CLIENT_TIME=${{ steps.client_end.outputs.client_duration }}
+          ADMIN_TIME=${{ steps.admin_end.outputs.admin_duration }}
+          ACCOUNTS_TIME=${{ steps.accounts_end.outputs.accounts_duration }}
+          BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
+          SETUP_TOTAL=$((CHECKOUT_TIME + PNPM_TIME + NODE_TIME + DEPS_TIME))
+
+          echo "total_duration=$TOTAL_TIME" >> $GITHUB_OUTPUT
+          echo "setup_total=$SETUP_TOTAL" >> $GITHUB_OUTPUT
+          echo "build_total=$BUILD_TOTAL" >> $GITHUB_OUTPUT
+
+          echo "## Run ${{ matrix.run }} Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Duration |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkout | ${CHECKOUT_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| pnpm Setup | ${PNPM_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Node.js Setup | ${NODE_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependencies | ${DEPS_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Setup Total** | **${SETUP_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Client Build | ${CLIENT_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Admin Build | ${ADMIN_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Accounts Build | ${ACCOUNTS_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Total** | **${BUILD_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
+          echo "| **TOTAL** | **${TOTAL_TIME}s** |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Save benchmark data
+        run: |
+          mkdir -p benchmark-results
+          cat > benchmark-results/run-${{ matrix.run }}.json << EOF
+          {
+            "benchmark_id": "${{ needs.benchmark-info.outputs.benchmark_id }}",
+            "benchmark_name": "${{ github.event.inputs.benchmark_name }}",
+            "run_number": ${{ matrix.run }},
+            "timestamp": "${{ needs.benchmark-info.outputs.timestamp }}",
+            "runner": {
+              "os": "ubuntu-latest",
+              "node_version": "22",
+              "pnpm_version": "9.15.0"
+            },
+            "timings": {
+              "checkout": ${{ steps.checkout_end.outputs.checkout_duration }},
+              "pnpm_setup": ${{ steps.pnpm_end.outputs.pnpm_duration }},
+              "node_setup": ${{ steps.node_end.outputs.node_duration }},
+              "dependencies": ${{ steps.deps_end.outputs.deps_duration }},
+              "setup_total": ${{ steps.summary.outputs.setup_total }},
+              "client_build": ${{ steps.client_end.outputs.client_duration }},
+              "admin_build": ${{ steps.admin_end.outputs.admin_duration }},
+              "accounts_build": ${{ steps.accounts_end.outputs.accounts_duration }},
+              "build_total": ${{ steps.summary.outputs.build_total }},
+              "total": ${{ steps.summary.outputs.total_duration }}
+            },
+            "git_sha": "${{ github.sha }}",
+            "workflow_run_id": "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: Upload benchmark data
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-run-${{ matrix.run }}
+          path: benchmark-results/
+          retention-days: 90
+
+  analyze-results:
+    name: Analyze Benchmark Results
+    runs-on: ubuntu-latest
+    needs: [benchmark-info, benchmark-build]
+    steps:
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+
+      - name: Calculate statistics
+        id: stats
+        run: |
+          # Combine all results
+          find all-results -name "*.json" -type f -exec cat {} \; | jq -s '.' > combined-results.json
+
+          # Calculate averages
+          AVG_CHECKOUT=$(jq '[.[].timings.checkout] | add / length | floor' combined-results.json)
+          AVG_PNPM=$(jq '[.[].timings.pnpm_setup] | add / length | floor' combined-results.json)
+          AVG_NODE=$(jq '[.[].timings.node_setup] | add / length | floor' combined-results.json)
+          AVG_DEPS=$(jq '[.[].timings.dependencies] | add / length | floor' combined-results.json)
+          AVG_SETUP=$(jq '[.[].timings.setup_total] | add / length | floor' combined-results.json)
+          AVG_CLIENT=$(jq '[.[].timings.client_build] | add / length | floor' combined-results.json)
+          AVG_ADMIN=$(jq '[.[].timings.admin_build] | add / length | floor' combined-results.json)
+          AVG_ACCOUNTS=$(jq '[.[].timings.accounts_build] | add / length | floor' combined-results.json)
+          AVG_BUILD=$(jq '[.[].timings.build_total] | add / length | floor' combined-results.json)
+          AVG_TOTAL=$(jq '[.[].timings.total] | add / length | floor' combined-results.json)
+
+          # Calculate min/max
+          MIN_TOTAL=$(jq '[.[].timings.total] | min' combined-results.json)
+          MAX_TOTAL=$(jq '[.[].timings.total] | max' combined-results.json)
+
+          echo "avg_total=$AVG_TOTAL" >> $GITHUB_OUTPUT
+
+          echo "## 📊 Benchmark Results: ${{ github.event.inputs.benchmark_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Environment" >> $GITHUB_STEP_SUMMARY
+          echo "- Runner: ubuntu-latest" >> $GITHUB_STEP_SUMMARY
+          echo "- Node.js: 22" >> $GITHUB_STEP_SUMMARY
+          echo "- pnpm: 9.15.0" >> $GITHUB_STEP_SUMMARY
+          echo "- Runs: ${{ github.event.inputs.run_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Timestamp: ${{ needs.benchmark-info.outputs.timestamp }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Average Timings" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Duration | Percentage |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|----------|------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkout | ${AVG_CHECKOUT}s | $(( AVG_CHECKOUT * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| pnpm Setup | ${AVG_PNPM}s | $(( AVG_PNPM * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Node.js Setup | ${AVG_NODE}s | $(( AVG_NODE * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependencies | ${AVG_DEPS}s | $(( AVG_DEPS * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Setup Total** | **${AVG_SETUP}s** | **$(( AVG_SETUP * 100 / AVG_TOTAL ))%** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Client Build | ${AVG_CLIENT}s | $(( AVG_CLIENT * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Admin Build | ${AVG_ADMIN}s | $(( AVG_ADMIN * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| Accounts Build | ${AVG_ACCOUNTS}s | $(( AVG_ACCOUNTS * 100 / AVG_TOTAL ))% |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Total** | **${AVG_BUILD}s** | **$(( AVG_BUILD * 100 / AVG_TOTAL ))%** |" >> $GITHUB_STEP_SUMMARY
+          echo "| **TOTAL** | **${AVG_TOTAL}s** | **100%** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Variance" >> $GITHUB_STEP_SUMMARY
+          echo "- Min: ${MIN_TOTAL}s" >> $GITHUB_STEP_SUMMARY
+          echo "- Max: ${MAX_TOTAL}s" >> $GITHUB_STEP_SUMMARY
+          echo "- Range: $((MAX_TOTAL - MIN_TOTAL))s" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create final benchmark report
+        run: |
+          cat > final-benchmark-report.json << EOF
+          {
+            "benchmark_id": "${{ needs.benchmark-info.outputs.benchmark_id }}",
+            "benchmark_name": "${{ github.event.inputs.benchmark_name }}",
+            "timestamp": "${{ needs.benchmark-info.outputs.timestamp }}",
+            "environment": {
+              "runner": "ubuntu-latest",
+              "node_version": "22",
+              "pnpm_version": "9.15.0"
+            },
+            "results": $(cat combined-results.json),
+            "summary": {
+              "avg_total_seconds": ${{ steps.stats.outputs.avg_total }},
+              "run_count": ${{ github.event.inputs.run_count }},
+              "git_sha": "${{ github.sha }}",
+              "workflow_run_id": "${{ github.run_id }}"
+            }
+          }
+          EOF
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report-${{ needs.benchmark-info.outputs.benchmark_id }}
+          path: |
+            final-benchmark-report.json
+            combined-results.json
+          retention-days: 90
+
+      - name: Commit benchmark results to repo
+        run: |
+          mkdir -p benchmarks
+          cp final-benchmark-report.json benchmarks/${{ needs.benchmark-info.outputs.benchmark_id }}.json
+
+          # Create or update index
+          if [ -f benchmarks/index.json ]; then
+            jq '. += [input]' benchmarks/index.json final-benchmark-report.json > benchmarks/index.tmp.json
+            mv benchmarks/index.tmp.json benchmarks/index.json
+          else
+            jq -n '[input]' final-benchmark-report.json > benchmarks/index.json
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add benchmarks/
+          git commit -m "chore: add benchmark results - ${{ needs.benchmark-info.outputs.benchmark_id }}" || echo "No changes to commit"
+          git push || echo "No changes to push"
