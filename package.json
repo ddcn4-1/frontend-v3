@@ -36,6 +36,7 @@
     "fsd:check:packages": "steiger packages"
   },
   "devDependencies": {
+    "@aws-sdk/client-s3": "^3.937.0",
     "@eslint/js": "^9.17.0",
     "@feature-sliced/eslint-config": "^0.1.1",
     "@feature-sliced/steiger-plugin": "^0.5.7",

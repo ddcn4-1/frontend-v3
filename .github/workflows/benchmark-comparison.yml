@@ -176,27 +176,34 @@ jobs:
       - name: Setup S3 remote cache
         if: matrix.s3_remote
         run: |
-          # Install turbo-cache-remote-s3 for S3 remote caching
-          npm install -g turbo-cache-remote-s3
-
           # Configure S3 cache bucket
           CACHE_BUCKET="turbo-cache-${{ matrix.s3_region }}"
 
-          echo "TURBO_API=$CACHE_BUCKET.s3.${{ matrix.s3_region }}.amazonaws.com" >> "$GITHUB_ENV"
-          echo "TURBO_TOKEN=no-token" >> "$GITHUB_ENV"
-          echo "TURBO_TEAM=no-team" >> "$GITHUB_ENV"
-          echo "AWS_REGION=${{ matrix.s3_region }}" >> "$GITHUB_ENV"
+          # Start custom S3 cache server in background
+          # Note: @aws-sdk/client-s3 is already installed in devDependencies
+          PORT=8080 \
+          AWS_REGION=${{ matrix.s3_region }} \
+          S3_BUCKET=$CACHE_BUCKET \
+          AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }} \
+          AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }} \
+          node scripts/turbo-s3-cache-server.js > turbo-cache-server.log 2>&1 &
 
-          # Start S3 cache server in background
-          turbo-cache-remote-s3 \
-            --port 8080 \
-            --region ${{ matrix.s3_region }} \
-            --bucket $CACHE_BUCKET &
+          CACHE_PID=$!
+          echo "cache_server_pid=$CACHE_PID" >> "$GITHUB_ENV"
 
           # Wait for server to start
-          sleep 2
+          sleep 3
+
+          # Test server is responding
+          curl -f http://localhost:8080/v8/artifacts/status || (cat turbo-cache-server.log && exit 1)
+
+          # Configure Turbo to use our cache server
+          echo "TURBO_API=http://localhost:8080" >> "$GITHUB_ENV"
+          echo "TURBO_TOKEN=no-token" >> "$GITHUB_ENV"
+          echo "TURBO_TEAM=no-team" >> "$GITHUB_ENV"
 
           echo "✅ S3 remote cache enabled (Region: ${{ matrix.s3_region }}, Bucket: $CACHE_BUCKET)"
+          cat turbo-cache-server.log
 
       # Sequential builds
       - name: Build all apps (Sequential)
