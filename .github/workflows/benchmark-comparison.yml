@@ -46,11 +46,11 @@ jobs:
           echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
 
           if [ "${{ github.event.inputs.configurations }}" = "all" ]; then
-            MATRIX='{"include":[{"name":"baseline","pnpm_cache":false,"turbo_cache":false,"parallel_build":false},{"name":"with-pnpm-cache","pnpm_cache":true,"turbo_cache":false,"parallel_build":false},{"name":"with-turbo-cache","pnpm_cache":true,"turbo_cache":true,"parallel_build":false},{"name":"parallel-builds","pnpm_cache":true,"turbo_cache":false,"parallel_build":true},{"name":"all-optimizations","pnpm_cache":true,"turbo_cache":true,"parallel_build":true}]}'
+            MATRIX='{"include":[{"name":"baseline","pnpm_cache":false,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"with-pnpm-cache","pnpm_cache":true,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"with-turbo-cache","pnpm_cache":true,"turbo_cache":true,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"with-s3-apne2","pnpm_cache":true,"turbo_cache":false,"s3_remote":true,"s3_region":"ap-northeast-2","parallel_build":false},{"name":"with-s3-usea1","pnpm_cache":true,"turbo_cache":false,"s3_remote":true,"s3_region":"us-east-1","parallel_build":false},{"name":"parallel-builds","pnpm_cache":true,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":true},{"name":"all-optimizations","pnpm_cache":true,"turbo_cache":true,"s3_remote":false,"s3_region":"","parallel_build":true},{"name":"all-with-s3-apne2","pnpm_cache":true,"turbo_cache":false,"s3_remote":true,"s3_region":"ap-northeast-2","parallel_build":true}]}'
           elif [ "${{ github.event.inputs.configurations }}" = "cache-only" ]; then
-            MATRIX='{"include":[{"name":"baseline","pnpm_cache":false,"turbo_cache":false,"parallel_build":false},{"name":"with-pnpm-cache","pnpm_cache":true,"turbo_cache":false,"parallel_build":false},{"name":"with-turbo-cache","pnpm_cache":true,"turbo_cache":true,"parallel_build":false}]}'
+            MATRIX='{"include":[{"name":"baseline","pnpm_cache":false,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"with-pnpm-cache","pnpm_cache":true,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"with-turbo-cache","pnpm_cache":true,"turbo_cache":true,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"with-s3-apne2","pnpm_cache":true,"turbo_cache":false,"s3_remote":true,"s3_region":"ap-northeast-2","parallel_build":false},{"name":"with-s3-usea1","pnpm_cache":true,"turbo_cache":false,"s3_remote":true,"s3_region":"us-east-1","parallel_build":false}]}'
           else
-            MATRIX='{"include":[{"name":"baseline","pnpm_cache":false,"turbo_cache":false,"parallel_build":false},{"name":"parallel-builds","pnpm_cache":true,"turbo_cache":false,"parallel_build":true}]}'
+            MATRIX='{"include":[{"name":"baseline","pnpm_cache":false,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":false},{"name":"parallel-builds","pnpm_cache":true,"turbo_cache":false,"s3_remote":false,"s3_region":"","parallel_build":true}]}'
           fi
 
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
@@ -81,12 +81,19 @@ jobs:
       matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
       fail-fast: false
     steps:
-      - name: Record start time
+      - name: Record start time and collect runner specs
         id: start
         run: |
           START_TIME=$(date +%s%3N)
           echo "start_time=$START_TIME" >> "$GITHUB_OUTPUT"
           echo "Start: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+
+          # Collect runner specifications
+          echo "cpu_cores=$(nproc)" >> "$GITHUB_OUTPUT"
+          echo "total_memory=$(free -h | awk '/^Mem:/ {print $2}')" >> "$GITHUB_OUTPUT"
+          echo "available_memory=$(free -h | awk '/^Mem:/ {print $7}')" >> "$GITHUB_OUTPUT"
+          echo "cpu_model=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)" >> "$GITHUB_OUTPUT"
+          echo "disk_space=$(df -h / | awk 'NR==2 {print $4}')" >> "$GITHUB_OUTPUT"
 
       - name: Checkout
         id: checkout
@@ -156,7 +163,7 @@ jobs:
           echo "deps_duration=$DEPS_TIME" >> "$GITHUB_OUTPUT"
           echo "Dependencies: ${DEPS_TIME}s"
 
-      # Turbo local cache configuration
+      # Turbo cache configuration
       - name: Setup Turbo local cache
         if: matrix.turbo_cache
         uses: actions/cache@v4
@@ -165,6 +172,31 @@ jobs:
           key: ${{ runner.os }}-turbo-${{ github.sha }}
           restore-keys: |
             ${{ runner.os }}-turbo-
+
+      - name: Setup S3 remote cache
+        if: matrix.s3_remote
+        run: |
+          # Install turbo-cache-remote-s3 for S3 remote caching
+          npm install -g turbo-cache-remote-s3
+
+          # Configure S3 cache bucket
+          CACHE_BUCKET="turbo-cache-${{ matrix.s3_region }}"
+
+          echo "TURBO_API=$CACHE_BUCKET.s3.${{ matrix.s3_region }}.amazonaws.com" >> "$GITHUB_ENV"
+          echo "TURBO_TOKEN=no-token" >> "$GITHUB_ENV"
+          echo "TURBO_TEAM=no-team" >> "$GITHUB_ENV"
+          echo "AWS_REGION=${{ matrix.s3_region }}" >> "$GITHUB_ENV"
+
+          # Start S3 cache server in background
+          turbo-cache-remote-s3 \
+            --port 8080 \
+            --region ${{ matrix.s3_region }} \
+            --bucket $CACHE_BUCKET &
+
+          # Wait for server to start
+          sleep 2
+
+          echo "✅ S3 remote cache enabled (Region: ${{ matrix.s3_region }}, Bucket: $CACHE_BUCKET)"
 
       # Sequential builds
       - name: Build all apps (Sequential)
@@ -287,7 +319,16 @@ jobs:
           # Determine configuration icons
           PNPM_ICON=${{ matrix.pnpm_cache && '✅' || '❌' }}
           TURBO_ICON=${{ matrix.turbo_cache && '✅' || '❌' }}
+          S3_ICON=${{ matrix.s3_remote && '✅' || '❌' }}
           PARALLEL_ICON=${{ matrix.parallel_build && '✅' || '❌' }}
+
+          # S3 Region display
+          S3_REGION="${{ matrix.s3_region }}"
+          if [ -n "$S3_REGION" ]; then
+            S3_DISPLAY="${S3_ICON} ($S3_REGION)"
+          else
+            S3_DISPLAY="${S3_ICON}"
+          fi
 
           # Calculate percentages
           CHECKOUT_PCT=$(echo "scale=1; ($CHECKOUT_TIME / $TOTAL_TIME) * 100" | bc)
@@ -308,7 +349,8 @@ jobs:
 
           **Configuration:**
           - pnpm Cache: ${PNPM_ICON}
-          - Turbo Cache: ${TURBO_ICON}
+          - Turbo Local Cache: ${TURBO_ICON}
+          - S3 Remote Cache: ${S3_DISPLAY}
           - Parallel Build: ${PARALLEL_ICON}
 
           ### ⏱️ Performance Breakdown
@@ -339,12 +381,19 @@ jobs:
             "configuration": {
               "pnpm_cache": ${{ matrix.pnpm_cache }},
               "turbo_cache": ${{ matrix.turbo_cache }},
+              "s3_remote": ${{ matrix.s3_remote }},
+              "s3_region": "${{ matrix.s3_region }}",
               "parallel_build": ${{ matrix.parallel_build }}
             },
             "runner": {
               "os": "ubuntu-latest",
               "node_version": "22",
-              "pnpm_version": "9.15.0"
+              "pnpm_version": "9.15.0",
+              "cpu_cores": "${{ steps.start.outputs.cpu_cores }}",
+              "cpu_model": "${{ steps.start.outputs.cpu_model }}",
+              "total_memory": "${{ steps.start.outputs.total_memory }}",
+              "available_memory": "${{ steps.start.outputs.available_memory }}",
+              "disk_space": "${{ steps.start.outputs.disk_space }}"
             },
             "timings": {
               "checkout": ${{ steps.checkout_end.outputs.checkout_duration }},
@@ -387,16 +436,31 @@ jobs:
           mkdir -p combined
           find all-results -name "*.json" -type f -exec cp {} combined/ \;
 
-          # Create comparison report
-          cat > comparison-report.md << 'EOF'
+          # Create comparison report and extract runner specs from first result
+          FIRST_FILE=$(find combined -name "*.json" -type f | head -1)
+          CPU_CORES=$(jq -r '.runner.cpu_cores' "$FIRST_FILE")
+          CPU_MODEL=$(jq -r '.runner.cpu_model' "$FIRST_FILE")
+          TOTAL_MEM=$(jq -r '.runner.total_memory' "$FIRST_FILE")
+          DISK_SPACE=$(jq -r '.runner.disk_space' "$FIRST_FILE")
+
+          cat > comparison-report.md << EOF
           # 🏆 Multi Benchmark Comparison Report
 
           <details>
           <summary>📋 Environment Details</summary>
 
+          **Software:**
           - **Runner**: ubuntu-latest
           - **Node.js**: 22
           - **pnpm**: 9.15.0
+
+          **Hardware:**
+          - **CPU**: ${CPU_MODEL}
+          - **CPU Cores**: ${CPU_CORES}
+          - **Memory**: ${TOTAL_MEM}
+          - **Available Disk**: ${DISK_SPACE}
+
+          **Metadata:**
           - **Timestamp**: ${{ needs.setup-matrix.outputs.timestamp }}
           - **Git SHA**: ${{ github.sha }}
           - **Workflow Run**: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
@@ -415,6 +479,8 @@ jobs:
             NAME=$(jq -r '.benchmark_name' "$file")
             PNPM=$(jq -r '.configuration.pnpm_cache' "$file")
             TURBO=$(jq -r '.configuration.turbo_cache' "$file")
+            S3=$(jq -r '.configuration.s3_remote' "$file")
+            S3_REGION=$(jq -r '.configuration.s3_region' "$file")
             PARALLEL=$(jq -r '.configuration.parallel_build' "$file")
             SETUP=$(jq -r '.timings.setup_total' "$file")
             BUILD=$(jq -r '.timings.build_total' "$file")
@@ -423,7 +489,10 @@ jobs:
             # Build cache configuration string
             CACHE_CONFIG=""
             [ "$PNPM" = "true" ] && CACHE_CONFIG="${CACHE_CONFIG}📦pnpm "
-            [ "$TURBO" = "true" ] && CACHE_CONFIG="${CACHE_CONFIG}⚡turbo "
+            [ "$TURBO" = "true" ] && CACHE_CONFIG="${CACHE_CONFIG}⚡local "
+            if [ "$S3" = "true" ] && [ -n "$S3_REGION" ]; then
+              CACHE_CONFIG="${CACHE_CONFIG}☁️S3-${S3_REGION} "
+            fi
             [ -z "$CACHE_CONFIG" ] && CACHE_CONFIG="❌ none"
 
             # Build mode
@@ -519,6 +588,8 @@ jobs:
             # Check which optimizations provided the most benefit
             PNPM_ONLY=$(find combined -name "with-pnpm-cache.json" -type f | head -1)
             TURBO_ONLY=$(find combined -name "with-turbo-cache.json" -type f | head -1)
+            S3_APNE2=$(find combined -name "with-s3-apne2.json" -type f | head -1)
+            S3_USEA1=$(find combined -name "with-s3-usea1.json" -type f | head -1)
             PARALLEL_ONLY=$(find combined -name "parallel-builds.json" -type f | head -1)
 
             if [ -n "$PNPM_ONLY" ]; then
@@ -530,13 +601,38 @@ jobs:
             if [ -n "$TURBO_ONLY" ]; then
               TURBO_TIME=$(jq -r '.timings.total' "$TURBO_ONLY")
               TURBO_IMPROVE=$(echo "scale=1; (($BASELINE_TOTAL - $TURBO_TIME) / $BASELINE_TOTAL) * 100" | bc)
-              echo "- **Turbo Cache**: ${TURBO_IMPROVE}% improvement in total time" >> comparison-report.md
+              echo "- **Turbo Local Cache**: ${TURBO_IMPROVE}% improvement in total time" >> comparison-report.md
+            fi
+
+            if [ -n "$S3_APNE2" ]; then
+              S3_APNE2_TIME=$(jq -r '.timings.total' "$S3_APNE2")
+              S3_APNE2_IMPROVE=$(echo "scale=1; (($BASELINE_TOTAL - $S3_APNE2_TIME) / $BASELINE_TOTAL) * 100" | bc)
+              echo "- **S3 Remote Cache (ap-northeast-2)**: ${S3_APNE2_IMPROVE}% improvement in total time" >> comparison-report.md
+            fi
+
+            if [ -n "$S3_USEA1" ]; then
+              S3_USEA1_TIME=$(jq -r '.timings.total' "$S3_USEA1")
+              S3_USEA1_IMPROVE=$(echo "scale=1; (($BASELINE_TOTAL - $S3_USEA1_TIME) / $BASELINE_TOTAL) * 100" | bc)
+              echo "- **S3 Remote Cache (us-east-1)**: ${S3_USEA1_IMPROVE}% improvement in total time" >> comparison-report.md
             fi
 
             if [ -n "$PARALLEL_ONLY" ]; then
               PARALLEL_TIME=$(jq -r '.timings.total' "$PARALLEL_ONLY")
               PARALLEL_IMPROVE=$(echo "scale=1; (($BASELINE_TOTAL - $PARALLEL_TIME) / $BASELINE_TOTAL) * 100" | bc)
               echo "- **Parallel Builds**: ${PARALLEL_IMPROVE}% improvement in total time" >> comparison-report.md
+            fi
+
+            # S3 region comparison
+            if [ -n "$S3_APNE2" ] && [ -n "$S3_USEA1" ]; then
+              REGION_DIFF=$(echo "scale=1; (($S3_USEA1_TIME - $S3_APNE2_TIME) / $S3_APNE2_TIME) * 100" | bc)
+              if (( $(echo "$REGION_DIFF > 0" | bc) )); then
+                echo "" >> comparison-report.md
+                echo "**Region Impact**: ap-northeast-2 is ${REGION_DIFF}% faster than us-east-1 (closer to runner location)" >> comparison-report.md
+              elif (( $(echo "$REGION_DIFF < 0" | bc) )); then
+                REGION_DIFF_ABS=$(echo "scale=1; -1 * $REGION_DIFF" | bc)
+                echo "" >> comparison-report.md
+                echo "**Region Impact**: us-east-1 is ${REGION_DIFF_ABS}% faster than ap-northeast-2" >> comparison-report.md
+              fi
             fi
 
             echo "" >> comparison-report.md
