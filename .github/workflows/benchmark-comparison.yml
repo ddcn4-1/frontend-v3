@@ -222,7 +222,16 @@ jobs:
           CLIENT_TIME=${client_duration}
           ADMIN_TIME=${admin_duration}
           ACCOUNTS_TIME=${accounts_duration}
-          BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
+
+          # For sequential builds: sum all times
+          # For parallel builds: use the total (already the max time)
+          if [ "${{ matrix.parallel_build }}" = "true" ]; then
+            # Parallel: all three times are the same (total parallel time)
+            BUILD_TOTAL=$CLIENT_TIME
+          else
+            # Sequential: sum individual times
+            BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
+          fi
 
           echo "client_duration=$CLIENT_TIME" >> "$GITHUB_OUTPUT"
           echo "admin_duration=$ADMIN_TIME" >> "$GITHUB_OUTPUT"
