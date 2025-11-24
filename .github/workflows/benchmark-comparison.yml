@@ -57,11 +57,12 @@ jobs:
           echo "- Timestamp: $TIMESTAMP" >> $GITHUB_STEP_SUMMARY
 
   run-benchmarks:
-    name: Benchmark - ${{ matrix.name }} (Run ${{ matrix.run }})
+    name: Benchmark - ${{ matrix.name }}
     runs-on: ubuntu-latest
     needs: setup-matrix
     strategy:
       matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
+      fail-fast: false
     steps:
       - name: Record start time
         id: start
@@ -134,12 +135,15 @@ jobs:
           echo "deps_duration=$DEPS_TIME" >> $GITHUB_OUTPUT
           echo "Dependencies: ${DEPS_TIME}s"
 
-      # Turbo cache configuration
-      - name: Setup Turbo cache
+      # Turbo local cache configuration
+      - name: Setup Turbo local cache
         if: matrix.turbo_cache
-        run: |
-          echo "TURBO_TOKEN=${{ secrets.TURBO_TOKEN }}" >> $GITHUB_ENV
-          echo "TURBO_TEAM=${{ secrets.TURBO_TEAM }}" >> $GITHUB_ENV
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: ${{ runner.os }}-turbo-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-
 
       # Sequential builds
       - name: Build all apps (Sequential)
@@ -174,52 +178,50 @@ jobs:
         run: |
           BUILD_START=$(date +%s)
 
-          # Start all builds in parallel
-          pnpm run build --filter=client &
+          # Start all builds in parallel with time tracking
+          (time pnpm run build --filter=client 2>&1) > client_build.log 2>&1 &
           CLIENT_PID=$!
 
-          pnpm run build --filter=admin &
+          (time pnpm run build --filter=admin 2>&1) > admin_build.log 2>&1 &
           ADMIN_PID=$!
 
-          pnpm run build --filter=accounts &
+          (time pnpm run build --filter=accounts 2>&1) > accounts_build.log 2>&1 &
           ACCOUNTS_PID=$!
 
-          # Wait for all to complete
+          # Wait for all to complete and get exit codes
           wait $CLIENT_PID
           CLIENT_EXIT=$?
-          CLIENT_END=$(date +%s)
 
           wait $ADMIN_PID
           ADMIN_EXIT=$?
-          ADMIN_END=$(date +%s)
 
           wait $ACCOUNTS_PID
           ACCOUNTS_EXIT=$?
-          ACCOUNTS_END=$(date +%s)
 
-          # Calculate individual times (approximate)
-          CLIENT_TIME=$((CLIENT_END - BUILD_START))
-          ADMIN_TIME=$((ADMIN_END - BUILD_START))
-          ACCOUNTS_TIME=$((ACCOUNTS_END - BUILD_START))
+          BUILD_END=$(date +%s)
+          TOTAL_PARALLEL_TIME=$((BUILD_END - BUILD_START))
 
-          echo "client_duration=$CLIENT_TIME" >> $GITHUB_ENV
-          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_ENV
-          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_ENV
+          # For parallel builds, total time is the longest running build
+          # Individual times are approximations since they run concurrently
+          echo "client_duration=$TOTAL_PARALLEL_TIME" >> $GITHUB_ENV
+          echo "admin_duration=$TOTAL_PARALLEL_TIME" >> $GITHUB_ENV
+          echo "accounts_duration=$TOTAL_PARALLEL_TIME" >> $GITHUB_ENV
 
           # Check all succeeded
           if [ $CLIENT_EXIT -ne 0 ] || [ $ADMIN_EXIT -ne 0 ] || [ $ACCOUNTS_EXIT -ne 0 ]; then
             echo "One or more builds failed"
+            cat client_build.log admin_build.log accounts_build.log
             exit 1
           fi
 
-          echo "Parallel build completed: Client: ${CLIENT_TIME}s, Admin: ${ADMIN_TIME}s, Accounts: ${ACCOUNTS_TIME}s"
+          echo "Parallel build completed in ${TOTAL_PARALLEL_TIME}s"
 
       - name: Record build times
         id: build_end
         run: |
-          CLIENT_TIME=${{ env.client_duration }}
-          ADMIN_TIME=${{ env.admin_duration }}
-          ACCOUNTS_TIME=${{ env.accounts_duration }}
+          CLIENT_TIME=${client_duration}
+          ADMIN_TIME=${admin_duration}
+          ACCOUNTS_TIME=${accounts_duration}
           BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
 
           echo "client_duration=$CLIENT_TIME" >> $GITHUB_OUTPUT
