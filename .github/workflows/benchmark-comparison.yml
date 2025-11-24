@@ -1,0 +1,429 @@
+name: Multi Benchmark Comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      configurations:
+        description: 'Benchmark configurations to run'
+        type: choice
+        options:
+          - 'all'           # baseline, turbo, parallel, all-opts
+          - 'cache-only'    # baseline vs turbo-cache
+          - 'build-only'    # baseline vs parallel-builds
+        default: 'all'
+      run_count:
+        description: 'Number of runs per configuration'
+        required: false
+        default: '3'
+
+env:
+  AWS_REGION: ap-northeast-2
+  CLIENT_BUCKET_NAME: ${{ vars.CLIENT_BUCKET_NAME }}
+  ADMIN_BUCKET_NAME: ${{ vars.ADMIN_BUCKET_NAME }}
+  ACCOUNTS_BUCKET_NAME: ${{ vars.ACCOUNTS_BUCKET_NAME }}
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  setup-matrix:
+    name: Setup Benchmark Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      timestamp: ${{ steps.set-matrix.outputs.timestamp }}
+    steps:
+      - name: Determine benchmark configurations
+        id: set-matrix
+        run: |
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+
+          if [ "${{ github.event.inputs.configurations }}" = "all" ]; then
+            MATRIX='{"include":[{"name":"baseline","turbo_cache":false,"parallel_build":false},{"name":"with-turbo","turbo_cache":true,"parallel_build":false},{"name":"parallel-builds","turbo_cache":false,"parallel_build":true},{"name":"all-optimizations","turbo_cache":true,"parallel_build":true}]}'
+          elif [ "${{ github.event.inputs.configurations }}" = "cache-only" ]; then
+            MATRIX='{"include":[{"name":"baseline","turbo_cache":false,"parallel_build":false},{"name":"with-turbo","turbo_cache":true,"parallel_build":false}]}'
+          else
+            MATRIX='{"include":[{"name":"baseline","turbo_cache":false,"parallel_build":false},{"name":"parallel-builds","turbo_cache":false,"parallel_build":true}]}'
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+          echo "## Multi Benchmark Comparison" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Configuration: ${{ github.event.inputs.configurations }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Runs per config: ${{ github.event.inputs.run_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Timestamp: $TIMESTAMP" >> $GITHUB_STEP_SUMMARY
+
+  run-benchmarks:
+    name: Benchmark - ${{ matrix.name }} (Run ${{ matrix.run }})
+    runs-on: ubuntu-latest
+    needs: setup-matrix
+    strategy:
+      matrix: ${{ fromJson(needs.setup-matrix.outputs.matrix) }}
+    steps:
+      - name: Record start time
+        id: start
+        run: |
+          START_TIME=$(date +%s)
+          echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
+          echo "Start: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+
+      - name: Checkout
+        id: checkout
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - uses: actions/checkout@v4
+
+      - name: Record checkout time
+        id: checkout_end
+        run: |
+          STEP_END=$(date +%s)
+          CHECKOUT_TIME=$((STEP_END - ${{ steps.checkout.outputs.step_start }}))
+          echo "checkout_duration=$CHECKOUT_TIME" >> $GITHUB_OUTPUT
+          echo "Checkout: ${CHECKOUT_TIME}s"
+
+      - name: Install pnpm (Start)
+        id: pnpm_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Record pnpm install time
+        id: pnpm_end
+        run: |
+          STEP_END=$(date +%s)
+          PNPM_TIME=$((STEP_END - ${{ steps.pnpm_start.outputs.step_start }}))
+          echo "pnpm_duration=$PNPM_TIME" >> $GITHUB_OUTPUT
+          echo "pnpm setup: ${PNPM_TIME}s"
+
+      - name: Setup Node.js (Start)
+        id: node_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Record Node.js setup time
+        id: node_end
+        run: |
+          STEP_END=$(date +%s)
+          NODE_TIME=$((STEP_END - ${{ steps.node_start.outputs.step_start }}))
+          echo "node_duration=$NODE_TIME" >> $GITHUB_OUTPUT
+          echo "Node.js setup: ${NODE_TIME}s"
+
+      - name: Install dependencies (Start)
+        id: deps_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Record dependencies install time
+        id: deps_end
+        run: |
+          STEP_END=$(date +%s)
+          DEPS_TIME=$((STEP_END - ${{ steps.deps_start.outputs.step_start }}))
+          echo "deps_duration=$DEPS_TIME" >> $GITHUB_OUTPUT
+          echo "Dependencies: ${DEPS_TIME}s"
+
+      # Turbo cache configuration
+      - name: Setup Turbo cache
+        if: matrix.turbo_cache
+        run: |
+          echo "TURBO_TOKEN=${{ secrets.TURBO_TOKEN }}" >> $GITHUB_ENV
+          echo "TURBO_TEAM=${{ secrets.TURBO_TEAM }}" >> $GITHUB_ENV
+
+      # Sequential builds
+      - name: Build all apps (Sequential)
+        if: ${{ !matrix.parallel_build }}
+        run: |
+          # Client
+          CLIENT_START=$(date +%s)
+          pnpm run build --filter=client
+          CLIENT_END=$(date +%s)
+          CLIENT_TIME=$((CLIENT_END - CLIENT_START))
+          echo "client_duration=$CLIENT_TIME" >> $GITHUB_ENV
+
+          # Admin
+          ADMIN_START=$(date +%s)
+          pnpm run build --filter=admin
+          ADMIN_END=$(date +%s)
+          ADMIN_TIME=$((ADMIN_END - ADMIN_START))
+          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_ENV
+
+          # Accounts
+          ACCOUNTS_START=$(date +%s)
+          pnpm run build --filter=accounts
+          ACCOUNTS_END=$(date +%s)
+          ACCOUNTS_TIME=$((ACCOUNTS_END - ACCOUNTS_START))
+          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_ENV
+
+          echo "Client: ${CLIENT_TIME}s, Admin: ${ADMIN_TIME}s, Accounts: ${ACCOUNTS_TIME}s"
+
+      # Parallel builds
+      - name: Build all apps (Parallel)
+        if: matrix.parallel_build
+        run: |
+          BUILD_START=$(date +%s)
+
+          # Start all builds in parallel
+          pnpm run build --filter=client &
+          CLIENT_PID=$!
+
+          pnpm run build --filter=admin &
+          ADMIN_PID=$!
+
+          pnpm run build --filter=accounts &
+          ACCOUNTS_PID=$!
+
+          # Wait for all to complete
+          wait $CLIENT_PID
+          CLIENT_EXIT=$?
+          CLIENT_END=$(date +%s)
+
+          wait $ADMIN_PID
+          ADMIN_EXIT=$?
+          ADMIN_END=$(date +%s)
+
+          wait $ACCOUNTS_PID
+          ACCOUNTS_EXIT=$?
+          ACCOUNTS_END=$(date +%s)
+
+          # Calculate individual times (approximate)
+          CLIENT_TIME=$((CLIENT_END - BUILD_START))
+          ADMIN_TIME=$((ADMIN_END - BUILD_START))
+          ACCOUNTS_TIME=$((ACCOUNTS_END - BUILD_START))
+
+          echo "client_duration=$CLIENT_TIME" >> $GITHUB_ENV
+          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_ENV
+          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_ENV
+
+          # Check all succeeded
+          if [ $CLIENT_EXIT -ne 0 ] || [ $ADMIN_EXIT -ne 0 ] || [ $ACCOUNTS_EXIT -ne 0 ]; then
+            echo "One or more builds failed"
+            exit 1
+          fi
+
+          echo "Parallel build completed: Client: ${CLIENT_TIME}s, Admin: ${ADMIN_TIME}s, Accounts: ${ACCOUNTS_TIME}s"
+
+      - name: Record build times
+        id: build_end
+        run: |
+          CLIENT_TIME=${{ env.client_duration }}
+          ADMIN_TIME=${{ env.admin_duration }}
+          ACCOUNTS_TIME=${{ env.accounts_duration }}
+          BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
+
+          echo "client_duration=$CLIENT_TIME" >> $GITHUB_OUTPUT
+          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_OUTPUT
+          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_OUTPUT
+          echo "build_total=$BUILD_TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Calculate total time and generate report
+        id: summary
+        run: |
+          END_TIME=$(date +%s)
+          TOTAL_TIME=$((END_TIME - ${{ steps.start.outputs.start_time }}))
+
+          CHECKOUT_TIME=${{ steps.checkout_end.outputs.checkout_duration }}
+          PNPM_TIME=${{ steps.pnpm_end.outputs.pnpm_duration }}
+          NODE_TIME=${{ steps.node_end.outputs.node_duration }}
+          DEPS_TIME=${{ steps.deps_end.outputs.deps_duration }}
+          CLIENT_TIME=${{ steps.build_end.outputs.client_duration }}
+          ADMIN_TIME=${{ steps.build_end.outputs.admin_duration }}
+          ACCOUNTS_TIME=${{ steps.build_end.outputs.accounts_duration }}
+          BUILD_TOTAL=${{ steps.build_end.outputs.build_total }}
+          SETUP_TOTAL=$((CHECKOUT_TIME + PNPM_TIME + NODE_TIME + DEPS_TIME))
+
+          echo "total_duration=$TOTAL_TIME" >> $GITHUB_OUTPUT
+          echo "setup_total=$SETUP_TOTAL" >> $GITHUB_OUTPUT
+          echo "build_total=$BUILD_TOTAL" >> $GITHUB_OUTPUT
+
+          echo "## ${{ matrix.name }} Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Phase | Duration |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkout | ${CHECKOUT_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| pnpm Setup | ${PNPM_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Node.js Setup | ${NODE_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dependencies | ${DEPS_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Setup Total** | **${SETUP_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
+          echo "| Client Build | ${CLIENT_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Admin Build | ${ADMIN_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Accounts Build | ${ACCOUNTS_TIME}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Build Total** | **${BUILD_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
+          echo "| **TOTAL** | **${TOTAL_TIME}s** |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Save benchmark data
+        run: |
+          mkdir -p benchmark-results
+          cat > benchmark-results/${{ matrix.name }}.json << EOF
+          {
+            "benchmark_id": "${{ matrix.name }}-${{ needs.setup-matrix.outputs.timestamp }}",
+            "benchmark_name": "${{ matrix.name }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "configuration": {
+              "turbo_cache": ${{ matrix.turbo_cache }},
+              "parallel_build": ${{ matrix.parallel_build }}
+            },
+            "runner": {
+              "os": "ubuntu-latest",
+              "node_version": "22",
+              "pnpm_version": "9.15.0"
+            },
+            "timings": {
+              "checkout": ${{ steps.checkout_end.outputs.checkout_duration }},
+              "pnpm_setup": ${{ steps.pnpm_end.outputs.pnpm_duration }},
+              "node_setup": ${{ steps.node_end.outputs.node_duration }},
+              "dependencies": ${{ steps.deps_end.outputs.deps_duration }},
+              "setup_total": ${{ steps.summary.outputs.setup_total }},
+              "client_build": ${{ steps.build_end.outputs.client_duration }},
+              "admin_build": ${{ steps.build_end.outputs.admin_duration }},
+              "accounts_build": ${{ steps.build_end.outputs.accounts_duration }},
+              "build_total": ${{ steps.summary.outputs.build_total }},
+              "total": ${{ steps.summary.outputs.total_duration }}
+            },
+            "git_sha": "${{ github.sha }}",
+            "workflow_run_id": "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: Upload benchmark data
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ matrix.name }}
+          path: benchmark-results/
+          retention-days: 90
+
+  compare-results:
+    name: Compare All Results
+    runs-on: ubuntu-latest
+    needs: [setup-matrix, run-benchmarks]
+    steps:
+      - name: Download all benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results
+
+      - name: Combine and analyze results
+        id: analyze
+        run: |
+          # Combine all results
+          mkdir -p combined
+          find all-results -name "*.json" -type f -exec cp {} combined/ \;
+
+          # Create comparison report
+          cat > comparison-report.md << 'EOF'
+          # 📊 Multi Benchmark Comparison Report
+
+          ## Environment
+          - Runner: ubuntu-latest
+          - Node.js: 22
+          - pnpm: 9.15.0
+          - Timestamp: ${{ needs.setup-matrix.outputs.timestamp }}
+
+          ## Configuration Comparison
+
+          EOF
+
+          # Generate comparison table
+          echo "| Configuration | Turbo Cache | Parallel Build | Setup Time | Build Time | Total Time |" >> comparison-report.md
+          echo "|---------------|-------------|----------------|------------|------------|------------|" >> comparison-report.md
+
+          for file in combined/*.json; do
+            NAME=$(jq -r '.benchmark_name' "$file")
+            TURBO=$(jq -r '.configuration.turbo_cache' "$file")
+            PARALLEL=$(jq -r '.configuration.parallel_build' "$file")
+            SETUP=$(jq -r '.timings.setup_total' "$file")
+            BUILD=$(jq -r '.timings.build_total' "$file")
+            TOTAL=$(jq -r '.timings.total' "$file")
+
+            TURBO_ICON=$( [ "$TURBO" = "true" ] && echo "✅" || echo "❌" )
+            PARALLEL_ICON=$( [ "$PARALLEL" = "true" ] && echo "✅" || echo "❌" )
+
+            echo "| $NAME | $TURBO_ICON | $PARALLEL_ICON | ${SETUP}s | ${BUILD}s | ${TOTAL}s |" >> comparison-report.md
+          done
+
+          echo "" >> comparison-report.md
+          echo "## Detailed Phase Breakdown" >> comparison-report.md
+          echo "" >> comparison-report.md
+
+          # Find baseline for comparison
+          BASELINE_FILE=$(find combined -name "baseline.json" -type f | head -1)
+
+          if [ -n "$BASELINE_FILE" ]; then
+            BASELINE_TOTAL=$(jq -r '.timings.total' "$BASELINE_FILE")
+            BASELINE_SETUP=$(jq -r '.timings.setup_total' "$BASELINE_FILE")
+            BASELINE_BUILD=$(jq -r '.timings.build_total' "$BASELINE_FILE")
+
+            echo "### Comparison vs Baseline" >> comparison-report.md
+            echo "" >> comparison-report.md
+            echo "| Configuration | Total Change | Setup Change | Build Change | Time Saved |" >> comparison-report.md
+            echo "|---------------|--------------|--------------|--------------|------------|" >> comparison-report.md
+
+            for file in combined/*.json; do
+              NAME=$(jq -r '.benchmark_name' "$file")
+
+              if [ "$NAME" != "baseline" ]; then
+                TOTAL=$(jq -r '.timings.total' "$file")
+                SETUP=$(jq -r '.timings.setup_total' "$file")
+                BUILD=$(jq -r '.timings.build_total' "$file")
+
+                TOTAL_CHANGE=$(awk "BEGIN {printf \"%.1f\", (($TOTAL - $BASELINE_TOTAL) / $BASELINE_TOTAL) * 100}")
+                SETUP_CHANGE=$(awk "BEGIN {printf \"%.1f\", (($SETUP - $BASELINE_SETUP) / $BASELINE_SETUP) * 100}")
+                BUILD_CHANGE=$(awk "BEGIN {printf \"%.1f\", (($BUILD - $BASELINE_BUILD) / $BASELINE_BUILD) * 100}")
+                TIME_SAVED=$((BASELINE_TOTAL - TOTAL))
+
+                echo "| $NAME | ${TOTAL_CHANGE}% | ${SETUP_CHANGE}% | ${BUILD_CHANGE}% | ${TIME_SAVED}s |" >> comparison-report.md
+              fi
+            done
+
+            echo "" >> comparison-report.md
+            echo "## Recommendations" >> comparison-report.md
+            echo "" >> comparison-report.md
+
+            # Find best configuration
+            BEST_FILE=$(find combined -name "*.json" -type f -exec jq -r '.timings.total' {} + | sort -n | head -1)
+            BEST_CONFIG=$(find combined -name "*.json" -type f -exec sh -c 'if [ "$(jq -r .timings.total "$1")" = "'"$BEST_FILE"'" ]; then jq -r .benchmark_name "$1"; fi' _ {} \;)
+
+            echo "🏆 **Best Configuration**: \`$BEST_CONFIG\`" >> comparison-report.md
+            echo "" >> comparison-report.md
+          fi
+
+          # Save report
+          cat comparison-report.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Create comparison artifact
+        run: |
+          cat > comparison-summary.json << EOF
+          {
+            "timestamp": "${{ needs.setup-matrix.outputs.timestamp }}",
+            "configuration_set": "${{ github.event.inputs.configurations }}",
+            "results": $(find combined -name "*.json" -type f -exec cat {} \; | jq -s '.'),
+            "workflow_run_id": "${{ github.run_id }}"
+          }
+          EOF
+
+      - name: Upload comparison report
+        uses: actions/upload-artifact@v4
+        with:
+          name: comparison-report-${{ needs.setup-matrix.outputs.timestamp }}
+          path: |
+            comparison-report.md
+            comparison-summary.json
+            combined/
+          retention-days: 90
+
+      - name: Comment summary
+        run: |
+          echo "✅ Multi benchmark comparison completed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Download the comparison report artifact for detailed analysis." >> $GITHUB_STEP_SUMMARY
