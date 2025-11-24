@@ -38,7 +38,7 @@ jobs:
         id: set-matrix
         run: |
           TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
 
           if [ "${{ github.event.inputs.configurations }}" = "all" ]; then
             MATRIX='{"include":[{"name":"baseline","turbo_cache":false,"parallel_build":false},{"name":"with-turbo","turbo_cache":true,"parallel_build":false},{"name":"parallel-builds","turbo_cache":false,"parallel_build":true},{"name":"all-optimizations","turbo_cache":true,"parallel_build":true}]}'
@@ -48,13 +48,13 @@ jobs:
             MATRIX='{"include":[{"name":"baseline","turbo_cache":false,"parallel_build":false},{"name":"parallel-builds","turbo_cache":false,"parallel_build":true}]}'
           fi
 
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
-          echo "## Multi Benchmark Comparison" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Configuration: ${{ github.event.inputs.configurations }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Runs per config: ${{ github.event.inputs.run_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- Timestamp: $TIMESTAMP" >> $GITHUB_STEP_SUMMARY
+          echo "## Multi Benchmark Comparison" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Configuration: ${{ github.event.inputs.configurations }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Runs per config: ${{ github.event.inputs.run_count }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Timestamp: $TIMESTAMP" >> "$GITHUB_STEP_SUMMARY"
 
   run-benchmarks:
     name: Benchmark - ${{ matrix.name }}
@@ -68,12 +68,12 @@ jobs:
         id: start
         run: |
           START_TIME=$(date +%s)
-          echo "start_time=$START_TIME" >> $GITHUB_OUTPUT
+          echo "start_time=$START_TIME" >> "$GITHUB_OUTPUT"
           echo "Start: $(date -u +"%Y-%m-%d %H:%M:%S UTC")"
 
       - name: Checkout
         id: checkout
-        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+        run: echo "step_start=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/checkout@v4
 
@@ -82,12 +82,12 @@ jobs:
         run: |
           STEP_END=$(date +%s)
           CHECKOUT_TIME=$((STEP_END - ${{ steps.checkout.outputs.step_start }}))
-          echo "checkout_duration=$CHECKOUT_TIME" >> $GITHUB_OUTPUT
+          echo "checkout_duration=$CHECKOUT_TIME" >> "$GITHUB_OUTPUT"
           echo "Checkout: ${CHECKOUT_TIME}s"
 
       - name: Install pnpm (Start)
         id: pnpm_start
-        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+        run: echo "step_start=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -99,12 +99,12 @@ jobs:
         run: |
           STEP_END=$(date +%s)
           PNPM_TIME=$((STEP_END - ${{ steps.pnpm_start.outputs.step_start }}))
-          echo "pnpm_duration=$PNPM_TIME" >> $GITHUB_OUTPUT
+          echo "pnpm_duration=$PNPM_TIME" >> "$GITHUB_OUTPUT"
           echo "pnpm setup: ${PNPM_TIME}s"
 
       - name: Setup Node.js (Start)
         id: node_start
-        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+        run: echo "step_start=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -117,12 +117,12 @@ jobs:
         run: |
           STEP_END=$(date +%s)
           NODE_TIME=$((STEP_END - ${{ steps.node_start.outputs.step_start }}))
-          echo "node_duration=$NODE_TIME" >> $GITHUB_OUTPUT
+          echo "node_duration=$NODE_TIME" >> "$GITHUB_OUTPUT"
           echo "Node.js setup: ${NODE_TIME}s"
 
       - name: Install dependencies (Start)
         id: deps_start
-        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+        run: echo "step_start=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -132,7 +132,7 @@ jobs:
         run: |
           STEP_END=$(date +%s)
           DEPS_TIME=$((STEP_END - ${{ steps.deps_start.outputs.step_start }}))
-          echo "deps_duration=$DEPS_TIME" >> $GITHUB_OUTPUT
+          echo "deps_duration=$DEPS_TIME" >> "$GITHUB_OUTPUT"
           echo "Dependencies: ${DEPS_TIME}s"
 
       # Turbo local cache configuration
@@ -151,24 +151,24 @@ jobs:
         run: |
           # Client
           CLIENT_START=$(date +%s)
-          pnpm run build --filter=client
+          pnpm run build --filter=@apps/client
           CLIENT_END=$(date +%s)
           CLIENT_TIME=$((CLIENT_END - CLIENT_START))
-          echo "client_duration=$CLIENT_TIME" >> $GITHUB_ENV
+          echo "client_duration=$CLIENT_TIME" >> "$GITHUB_ENV"
 
           # Admin
           ADMIN_START=$(date +%s)
-          pnpm run build --filter=admin
+          pnpm run build --filter=@apps/admin
           ADMIN_END=$(date +%s)
           ADMIN_TIME=$((ADMIN_END - ADMIN_START))
-          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_ENV
+          echo "admin_duration=$ADMIN_TIME" >> "$GITHUB_ENV"
 
           # Accounts
           ACCOUNTS_START=$(date +%s)
-          pnpm run build --filter=accounts
+          pnpm run build --filter=@apps/accounts
           ACCOUNTS_END=$(date +%s)
           ACCOUNTS_TIME=$((ACCOUNTS_END - ACCOUNTS_START))
-          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_ENV
+          echo "accounts_duration=$ACCOUNTS_TIME" >> "$GITHUB_ENV"
 
           echo "Client: ${CLIENT_TIME}s, Admin: ${ADMIN_TIME}s, Accounts: ${ACCOUNTS_TIME}s"
 
@@ -179,13 +179,13 @@ jobs:
           BUILD_START=$(date +%s)
 
           # Start all builds in parallel with time tracking
-          (time pnpm run build --filter=client 2>&1) > client_build.log 2>&1 &
+          (time pnpm run build --filter=@apps/client 2>&1) > client_build.log 2>&1 &
           CLIENT_PID=$!
 
-          (time pnpm run build --filter=admin 2>&1) > admin_build.log 2>&1 &
+          (time pnpm run build --filter=@apps/admin 2>&1) > admin_build.log 2>&1 &
           ADMIN_PID=$!
 
-          (time pnpm run build --filter=accounts 2>&1) > accounts_build.log 2>&1 &
+          (time pnpm run build --filter=@apps/accounts 2>&1) > accounts_build.log 2>&1 &
           ACCOUNTS_PID=$!
 
           # Wait for all to complete and get exit codes
@@ -203,9 +203,9 @@ jobs:
 
           # For parallel builds, total time is the longest running build
           # Individual times are approximations since they run concurrently
-          echo "client_duration=$TOTAL_PARALLEL_TIME" >> $GITHUB_ENV
-          echo "admin_duration=$TOTAL_PARALLEL_TIME" >> $GITHUB_ENV
-          echo "accounts_duration=$TOTAL_PARALLEL_TIME" >> $GITHUB_ENV
+          echo "client_duration=$TOTAL_PARALLEL_TIME" >> "$GITHUB_ENV"
+          echo "admin_duration=$TOTAL_PARALLEL_TIME" >> "$GITHUB_ENV"
+          echo "accounts_duration=$TOTAL_PARALLEL_TIME" >> "$GITHUB_ENV"
 
           # Check all succeeded
           if [ $CLIENT_EXIT -ne 0 ] || [ $ADMIN_EXIT -ne 0 ] || [ $ACCOUNTS_EXIT -ne 0 ]; then
@@ -224,10 +224,10 @@ jobs:
           ACCOUNTS_TIME=${accounts_duration}
           BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
 
-          echo "client_duration=$CLIENT_TIME" >> $GITHUB_OUTPUT
-          echo "admin_duration=$ADMIN_TIME" >> $GITHUB_OUTPUT
-          echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_OUTPUT
-          echo "build_total=$BUILD_TOTAL" >> $GITHUB_OUTPUT
+          echo "client_duration=$CLIENT_TIME" >> "$GITHUB_OUTPUT"
+          echo "admin_duration=$ADMIN_TIME" >> "$GITHUB_OUTPUT"
+          echo "accounts_duration=$ACCOUNTS_TIME" >> "$GITHUB_OUTPUT"
+          echo "build_total=$BUILD_TOTAL" >> "$GITHUB_OUTPUT"
 
       - name: Calculate total time and generate report
         id: summary
@@ -245,24 +245,24 @@ jobs:
           BUILD_TOTAL=${{ steps.build_end.outputs.build_total }}
           SETUP_TOTAL=$((CHECKOUT_TIME + PNPM_TIME + NODE_TIME + DEPS_TIME))
 
-          echo "total_duration=$TOTAL_TIME" >> $GITHUB_OUTPUT
-          echo "setup_total=$SETUP_TOTAL" >> $GITHUB_OUTPUT
-          echo "build_total=$BUILD_TOTAL" >> $GITHUB_OUTPUT
+          echo "total_duration=$TOTAL_TIME" >> "$GITHUB_OUTPUT"
+          echo "setup_total=$SETUP_TOTAL" >> "$GITHUB_OUTPUT"
+          echo "build_total=$BUILD_TOTAL" >> "$GITHUB_OUTPUT"
 
-          echo "## ${{ matrix.name }} Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Phase | Duration |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|----------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Checkout | ${CHECKOUT_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| pnpm Setup | ${PNPM_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Node.js Setup | ${NODE_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dependencies | ${DEPS_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Setup Total** | **${SETUP_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
-          echo "| Client Build | ${CLIENT_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Admin Build | ${ADMIN_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Accounts Build | ${ACCOUNTS_TIME}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Build Total** | **${BUILD_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
-          echo "| **TOTAL** | **${TOTAL_TIME}s** |" >> $GITHUB_STEP_SUMMARY
+          echo "## ${{ matrix.name }} Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Phase | Duration |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|----------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Checkout | ${CHECKOUT_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| pnpm Setup | ${PNPM_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Node.js Setup | ${NODE_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Dependencies | ${DEPS_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Setup Total** | **${SETUP_TOTAL}s** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Client Build | ${CLIENT_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Admin Build | ${ADMIN_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Accounts Build | ${ACCOUNTS_TIME}s |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **Build Total** | **${BUILD_TOTAL}s** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| **TOTAL** | **${TOTAL_TIME}s** |" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Save benchmark data
         run: |
@@ -401,7 +401,7 @@ jobs:
           fi
 
           # Save report
-          cat comparison-report.md >> $GITHUB_STEP_SUMMARY
+          cat comparison-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create comparison artifact
         run: |
@@ -426,6 +426,6 @@ jobs:
 
       - name: Comment summary
         run: |
-          echo "✅ Multi benchmark comparison completed!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Download the comparison report artifact for detailed analysis." >> $GITHUB_STEP_SUMMARY
+          echo "✅ Multi benchmark comparison completed!" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Download the comparison report artifact for detailed analysis." >> "$GITHUB_STEP_SUMMARY"
