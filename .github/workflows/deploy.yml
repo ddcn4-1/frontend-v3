@@ -3,13 +3,12 @@ name: Deploy Frontend
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
-# Test env
-# 실제 사용하는 bucket name에 맞게 변경해주세요.
 env:
-  CLIENT_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-client"
-  ADMIN_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-admin"
-  ACCOUNTS_BUCKET_NAME: "ddcn41-frontend-v3-github-action-test-accounts"
+  CLIENT_BUCKET_NAME: ${{ vars.CLIENT_BUCKET_NAME }}
+  ADMIN_BUCKET_NAME: ${{ vars.ADMIN_BUCKET_NAME }}
+  ACCOUNTS_BUCKET_NAME: ${{ vars.ACCOUNTS_BUCKET_NAME }}
   AWS_REGION: ap-northeast-2
 
 permissions:
@@ -106,13 +105,92 @@ jobs:
 
       - name: S3 client Upload
         run: |
+          echo "⏱️ Starting client upload..."
+          START_TIME=$(date +%s)
+          FILE_COUNT=$(find ./build/client -type f | wc -l)
+          TOTAL_SIZE=$(du -sb ./build/client | cut -f1)
+
           aws s3 sync ./build/client s3://${{ env.CLIENT_BUCKET_NAME }} \
-            --delete
+            --delete \
+            --exact-timestamps
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          SPEED=$((TOTAL_SIZE / DURATION / 1024))
+
+          echo "client_upload_duration=${DURATION}" >> $GITHUB_ENV
+          echo "client_file_count=${FILE_COUNT}" >> $GITHUB_ENV
+          echo "client_total_size=${TOTAL_SIZE}" >> $GITHUB_ENV
+          echo "client_upload_speed=${SPEED}" >> $GITHUB_ENV
+
+          echo "✅ Client upload completed in ${DURATION}s (${FILE_COUNT} files, $(numfmt --to=iec ${TOTAL_SIZE}), ${SPEED} KB/s)"
+
       - name: S3 admin Upload
         run: |
+          echo "⏱️ Starting admin upload..."
+          START_TIME=$(date +%s)
+          FILE_COUNT=$(find ./build/admin -type f | wc -l)
+          TOTAL_SIZE=$(du -sb ./build/admin | cut -f1)
+
           aws s3 sync ./build/admin s3://${{ env.ADMIN_BUCKET_NAME }} \
-            --delete
+            --delete \
+            --exact-timestamps
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          SPEED=$((TOTAL_SIZE / DURATION / 1024))
+
+          echo "admin_upload_duration=${DURATION}" >> $GITHUB_ENV
+          echo "admin_file_count=${FILE_COUNT}" >> $GITHUB_ENV
+          echo "admin_total_size=${TOTAL_SIZE}" >> $GITHUB_ENV
+          echo "admin_upload_speed=${SPEED}" >> $GITHUB_ENV
+
+          echo "✅ Admin upload completed in ${DURATION}s (${FILE_COUNT} files, $(numfmt --to=iec ${TOTAL_SIZE}), ${SPEED} KB/s)"
+
       - name: S3 accounts Upload
         run: |
+          echo "⏱️ Starting accounts upload..."
+          START_TIME=$(date +%s)
+          FILE_COUNT=$(find ./build/accounts -type f | wc -l)
+          TOTAL_SIZE=$(du -sb ./build/accounts | cut -f1)
+
           aws s3 sync ./build/accounts s3://${{ env.ACCOUNTS_BUCKET_NAME }} \
-            --delete
+            --delete \
+            --exact-timestamps
+
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+          SPEED=$((TOTAL_SIZE / DURATION / 1024))
+
+          echo "accounts_upload_duration=${DURATION}" >> $GITHUB_ENV
+          echo "accounts_file_count=${FILE_COUNT}" >> $GITHUB_ENV
+          echo "accounts_total_size=${TOTAL_SIZE}" >> $GITHUB_ENV
+          echo "accounts_upload_speed=${SPEED}" >> $GITHUB_ENV
+
+          echo "✅ Accounts upload completed in ${DURATION}s (${FILE_COUNT} files, $(numfmt --to=iec ${TOTAL_SIZE}), ${SPEED} KB/s)"
+
+      - name: Generate Deployment Summary
+        run: |
+          TOTAL_UPLOAD_TIME=$((client_upload_duration + admin_upload_duration + accounts_upload_duration))
+          TOTAL_FILES=$((client_file_count + admin_file_count + accounts_file_count))
+          TOTAL_SIZE=$((client_total_size + admin_total_size + accounts_total_size))
+
+          echo "## 📦 Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### S3 Upload Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Application | Duration | Files | Size | Speed |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------------|----------|-------|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🎯 Client | ${client_upload_duration}s | ${client_file_count} | $(numfmt --to=iec ${client_total_size}) | ${client_upload_speed} KB/s |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🛠️ Admin | ${admin_upload_duration}s | ${admin_file_count} | $(numfmt --to=iec ${admin_total_size}) | ${admin_upload_speed} KB/s |" >> $GITHUB_STEP_SUMMARY
+          echo "| 👤 Accounts | ${accounts_upload_duration}s | ${accounts_file_count} | $(numfmt --to=iec ${accounts_total_size}) | ${accounts_upload_speed} KB/s |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Total** | **${TOTAL_UPLOAD_TIME}s** | **${TOTAL_FILES}** | **$(numfmt --to=iec ${TOTAL_SIZE})** | **-** |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Deployment Targets" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Region**: ${{ env.AWS_REGION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Client Bucket**: \`${{ env.CLIENT_BUCKET_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Admin Bucket**: \`${{ env.ADMIN_BUCKET_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Accounts Bucket**: \`${{ env.ACCOUNTS_BUCKET_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **Deployment completed successfully!**" >> $GITHUB_STEP_SUMMARY

@@ -11,12 +11,24 @@ on:
         description: 'Number of runs for averaging'
         required: false
         default: '3'
+      include_deploy:
+        description: 'Include S3 deployment benchmarking'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
 
 env:
   AWS_REGION: ap-northeast-2
+  CLIENT_BUCKET_NAME: ${{ vars.CLIENT_BUCKET_NAME }}
+  ADMIN_BUCKET_NAME: ${{ vars.ADMIN_BUCKET_NAME }}
+  ACCOUNTS_BUCKET_NAME: ${{ vars.ACCOUNTS_BUCKET_NAME }}
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   benchmark-info:
@@ -170,6 +182,99 @@ jobs:
           echo "accounts_duration=$ACCOUNTS_TIME" >> $GITHUB_OUTPUT
           echo "Accounts build: ${ACCOUNTS_TIME}s"
 
+      - name: Upload build artifacts for deployment
+        if: github.event.inputs.include_deploy == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-files-run-${{ matrix.run }}
+          path: |
+            ./apps/client/dist
+            ./apps/admin/dist
+            ./apps/accounts/dist
+          retention-days: 1
+
+      - name: Configure AWS credentials (OIDC)
+        if: github.event.inputs.include_deploy == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy to S3 - Client (Start)
+        if: github.event.inputs.include_deploy == 'true'
+        id: deploy_client_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Deploy to S3 - Client
+        if: github.event.inputs.include_deploy == 'true'
+        run: |
+          FILE_COUNT=$(find ./apps/client/dist -type f | wc -l)
+          TOTAL_SIZE=$(du -sb ./apps/client/dist | cut -f1)
+          aws s3 sync ./apps/client/dist s3://${{ env.CLIENT_BUCKET_NAME }}/benchmark-${{ matrix.run }}/ \
+            --delete \
+            --exact-timestamps
+          echo "deploy_client_files=$FILE_COUNT" >> $GITHUB_ENV
+          echo "deploy_client_size=$TOTAL_SIZE" >> $GITHUB_ENV
+
+      - name: Record client deploy time
+        if: github.event.inputs.include_deploy == 'true'
+        id: deploy_client_end
+        run: |
+          STEP_END=$(date +%s)
+          DEPLOY_TIME=$((STEP_END - ${{ steps.deploy_client_start.outputs.step_start }}))
+          echo "deploy_client_duration=$DEPLOY_TIME" >> $GITHUB_OUTPUT
+          echo "Client deploy: ${DEPLOY_TIME}s"
+
+      - name: Deploy to S3 - Admin (Start)
+        if: github.event.inputs.include_deploy == 'true'
+        id: deploy_admin_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Deploy to S3 - Admin
+        if: github.event.inputs.include_deploy == 'true'
+        run: |
+          FILE_COUNT=$(find ./apps/admin/dist -type f | wc -l)
+          TOTAL_SIZE=$(du -sb ./apps/admin/dist | cut -f1)
+          aws s3 sync ./apps/admin/dist s3://${{ env.ADMIN_BUCKET_NAME }}/benchmark-${{ matrix.run }}/ \
+            --delete \
+            --exact-timestamps
+          echo "deploy_admin_files=$FILE_COUNT" >> $GITHUB_ENV
+          echo "deploy_admin_size=$TOTAL_SIZE" >> $GITHUB_ENV
+
+      - name: Record admin deploy time
+        if: github.event.inputs.include_deploy == 'true'
+        id: deploy_admin_end
+        run: |
+          STEP_END=$(date +%s)
+          DEPLOY_TIME=$((STEP_END - ${{ steps.deploy_admin_start.outputs.step_start }}))
+          echo "deploy_admin_duration=$DEPLOY_TIME" >> $GITHUB_OUTPUT
+          echo "Admin deploy: ${DEPLOY_TIME}s"
+
+      - name: Deploy to S3 - Accounts (Start)
+        if: github.event.inputs.include_deploy == 'true'
+        id: deploy_accounts_start
+        run: echo "step_start=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Deploy to S3 - Accounts
+        if: github.event.inputs.include_deploy == 'true'
+        run: |
+          FILE_COUNT=$(find ./apps/accounts/dist -type f | wc -l)
+          TOTAL_SIZE=$(du -sb ./apps/accounts/dist | cut -f1)
+          aws s3 sync ./apps/accounts/dist s3://${{ env.ACCOUNTS_BUCKET_NAME }}/benchmark-${{ matrix.run }}/ \
+            --delete \
+            --exact-timestamps
+          echo "deploy_accounts_files=$FILE_COUNT" >> $GITHUB_ENV
+          echo "deploy_accounts_size=$TOTAL_SIZE" >> $GITHUB_ENV
+
+      - name: Record accounts deploy time
+        if: github.event.inputs.include_deploy == 'true'
+        id: deploy_accounts_end
+        run: |
+          STEP_END=$(date +%s)
+          DEPLOY_TIME=$((STEP_END - ${{ steps.deploy_accounts_start.outputs.step_start }}))
+          echo "deploy_accounts_duration=$DEPLOY_TIME" >> $GITHUB_OUTPUT
+          echo "Accounts deploy: ${DEPLOY_TIME}s"
+
       - name: Calculate total time and generate report
         id: summary
         run: |
@@ -186,9 +291,16 @@ jobs:
           BUILD_TOTAL=$((CLIENT_TIME + ADMIN_TIME + ACCOUNTS_TIME))
           SETUP_TOTAL=$((CHECKOUT_TIME + PNPM_TIME + NODE_TIME + DEPS_TIME))
 
+          # Deploy metrics (optional)
+          DEPLOY_CLIENT_TIME=${{ steps.deploy_client_end.outputs.deploy_client_duration || 0 }}
+          DEPLOY_ADMIN_TIME=${{ steps.deploy_admin_end.outputs.deploy_admin_duration || 0 }}
+          DEPLOY_ACCOUNTS_TIME=${{ steps.deploy_accounts_end.outputs.deploy_accounts_duration || 0 }}
+          DEPLOY_TOTAL=$((DEPLOY_CLIENT_TIME + DEPLOY_ADMIN_TIME + DEPLOY_ACCOUNTS_TIME))
+
           echo "total_duration=$TOTAL_TIME" >> $GITHUB_OUTPUT
           echo "setup_total=$SETUP_TOTAL" >> $GITHUB_OUTPUT
           echo "build_total=$BUILD_TOTAL" >> $GITHUB_OUTPUT
+          echo "deploy_total=$DEPLOY_TOTAL" >> $GITHUB_OUTPUT
 
           echo "## Run ${{ matrix.run }} Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -203,6 +315,14 @@ jobs:
           echo "| Admin Build | ${ADMIN_TIME}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Accounts Build | ${ACCOUNTS_TIME}s |" >> $GITHUB_STEP_SUMMARY
           echo "| **Build Total** | **${BUILD_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ github.event.inputs.include_deploy }}" = "true" ]; then
+            echo "| Client Deploy | ${DEPLOY_CLIENT_TIME}s |" >> $GITHUB_STEP_SUMMARY
+            echo "| Admin Deploy | ${DEPLOY_ADMIN_TIME}s |" >> $GITHUB_STEP_SUMMARY
+            echo "| Accounts Deploy | ${DEPLOY_ACCOUNTS_TIME}s |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Deploy Total** | **${DEPLOY_TOTAL}s** |" >> $GITHUB_STEP_SUMMARY
+          fi
+
           echo "| **TOTAL** | **${TOTAL_TIME}s** |" >> $GITHUB_STEP_SUMMARY
 
       - name: Save benchmark data
@@ -336,22 +456,3 @@ jobs:
             final-benchmark-report.json
             combined-results.json
           retention-days: 90
-
-      - name: Commit benchmark results to repo
-        run: |
-          mkdir -p benchmarks
-          cp final-benchmark-report.json benchmarks/${{ needs.benchmark-info.outputs.benchmark_id }}.json
-
-          # Create or update index
-          if [ -f benchmarks/index.json ]; then
-            jq '. += [input]' benchmarks/index.json final-benchmark-report.json > benchmarks/index.tmp.json
-            mv benchmarks/index.tmp.json benchmarks/index.json
-          else
-            jq -n '[input]' final-benchmark-report.json > benchmarks/index.json
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add benchmarks/
-          git commit -m "chore: add benchmark results - ${{ needs.benchmark-info.outputs.benchmark_id }}" || echo "No changes to commit"
-          git push || echo "No changes to push"
