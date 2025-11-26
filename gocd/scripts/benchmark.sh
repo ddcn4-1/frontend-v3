@@ -19,11 +19,15 @@ unset TURBO_CACHE
 
 cd repo
 
-# Disable turbo cache if not using it
-if [ "$USE_TURBO_CACHE" != "true" ]; then
+# Disable turbo cache if not using local turbo cache AND not using S3 remote cache
+if [ "$USE_TURBO_CACHE" != "true" ] && [ "$USE_S3_REMOTE" != "true" ]; then
   export TURBO_FORCE=true
   rm -rf .turbo node_modules/.cache/turbo 2>/dev/null || true
   echo "Turbo cache disabled (TURBO_FORCE=true)"
+elif [ "$USE_TURBO_CACHE" != "true" ] && [ "$USE_S3_REMOTE" = "true" ]; then
+  # S3 remote cache: clear local cache but allow remote
+  rm -rf .turbo node_modules/.cache/turbo 2>/dev/null || true
+  echo "Local turbo cache cleared, using S3 remote cache"
 fi
 
 START_TIME=$(date +%s%3N)
