@@ -17,16 +17,20 @@ NODE_VERSION="${NODE_VERSION:-22}"
 # Unset any Turborepo env vars that might interfere
 unset TURBO_CACHE
 
+# Use persistent cache directory outside of workspace (survives git fetch)
+export TURBO_CACHE_DIR=/godata/turbo-cache
+mkdir -p "$TURBO_CACHE_DIR"
+
 cd repo
 
 # Disable turbo cache if not using local turbo cache AND not using S3 remote cache
 if [ "$USE_TURBO_CACHE" != "true" ] && [ "$USE_S3_REMOTE" != "true" ]; then
   export TURBO_FORCE=true
-  rm -rf .turbo node_modules/.cache/turbo 2>/dev/null || true
+  rm -rf "${TURBO_CACHE_DIR:?}"/* .turbo node_modules/.cache/turbo 2>/dev/null || true
   echo "Turbo cache disabled (TURBO_FORCE=true)"
 elif [ "$USE_TURBO_CACHE" != "true" ] && [ "$USE_S3_REMOTE" = "true" ]; then
   # S3 remote cache: clear local cache but allow remote
-  rm -rf .turbo node_modules/.cache/turbo 2>/dev/null || true
+  rm -rf "${TURBO_CACHE_DIR:?}"/* .turbo node_modules/.cache/turbo 2>/dev/null || true
   echo "Local turbo cache cleared, using S3 remote cache"
 fi
 
