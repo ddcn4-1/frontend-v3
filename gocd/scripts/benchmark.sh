@@ -5,16 +5,26 @@ set -e
 # Usage: ./benchmark.sh <config_name> <pnpm_cache> <turbo_cache> <s3_remote> <s3_region> <parallel_build>
 
 CONFIG_NAME="${1:-baseline}"
-PNPM_CACHE="${2:-false}"
-TURBO_CACHE="${3:-false}"
-S3_REMOTE="${4:-false}"
+USE_PNPM_CACHE="${2:-false}"
+USE_TURBO_CACHE="${3:-false}"
+USE_S3_REMOTE="${4:-false}"
 S3_REGION="${5:-}"
-PARALLEL_BUILD="${6:-false}"
+USE_PARALLEL_BUILD="${6:-false}"
 
 PNPM_VERSION="${PNPM_VERSION:-9.15.0}"
 NODE_VERSION="${NODE_VERSION:-22}"
 
+# Unset any Turborepo env vars that might interfere
+unset TURBO_CACHE
+
 cd repo
+
+# Disable turbo cache if not using it
+if [ "$USE_TURBO_CACHE" != "true" ]; then
+  export TURBO_FORCE=true
+  rm -rf .turbo node_modules/.cache/turbo 2>/dev/null || true
+  echo "Turbo cache disabled (TURBO_FORCE=true)"
+fi
 
 START_TIME=$(date +%s%3N)
 echo "=== Benchmark: ${CONFIG_NAME} ==="
@@ -42,7 +52,7 @@ DEPS_END=$(date +%s%3N)
 DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
 
 # Setup S3 cache if enabled
-if [ "$S3_REMOTE" = "true" ] && [ -n "$S3_REGION" ]; then
+if [ "$USE_S3_REMOTE" = "true" ] && [ -n "$S3_REGION" ]; then
   CACHE_BUCKET="turbo-cache-${S3_REGION}"
   PORT=8080 \
   AWS_REGION=${S3_REGION} \
@@ -61,7 +71,7 @@ if [ "$S3_REMOTE" = "true" ] && [ -n "$S3_REGION" ]; then
 fi
 
 # Build apps
-if [ "$PARALLEL_BUILD" = "true" ]; then
+if [ "$USE_PARALLEL_BUILD" = "true" ]; then
   echo "Running parallel builds..."
   BUILD_START=$(date +%s%3N)
 
@@ -121,11 +131,11 @@ cat > benchmark-results/${CONFIG_NAME}.json << ENDJSON
   "benchmark_name": "${CONFIG_NAME}",
   "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
   "configuration": {
-    "pnpm_cache": ${PNPM_CACHE},
-    "turbo_cache": ${TURBO_CACHE},
-    "s3_remote": ${S3_REMOTE},
+    "pnpm_cache": ${USE_PNPM_CACHE},
+    "turbo_cache": ${USE_TURBO_CACHE},
+    "s3_remote": ${USE_S3_REMOTE},
     "s3_region": "${S3_REGION}",
-    "parallel_build": ${PARALLEL_BUILD}
+    "parallel_build": ${USE_PARALLEL_BUILD}
   },
   "runner": {
     "os": "gocd-agent",

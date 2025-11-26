@@ -30,11 +30,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "baseline"
-            PNPM_CACHE: "false"
-            TURBO_CACHE: "false"
-            S3_REMOTE: "false"
-            S3_REGION: ""
-            PARALLEL_BUILD: "false"
+            BENCH_PNPM_CACHE: "false"
+            BENCH_TURBO_CACHE: "false"
+            BENCH_S3_REMOTE: "false"
+            BENCH_S3_REGION: ""
+            BENCH_PARALLEL_BUILD: "false"
 
           jobs:
             benchmark:
@@ -68,11 +68,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "with-pnpm-cache"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "false"
-            S3_REMOTE: "false"
-            S3_REGION: ""
-            PARALLEL_BUILD: "false"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "false"
+            BENCH_S3_REMOTE: "false"
+            BENCH_S3_REGION: ""
+            BENCH_PARALLEL_BUILD: "false"
 
           jobs:
             benchmark:
@@ -106,11 +106,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "with-turbo-cache"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "true"
-            S3_REMOTE: "false"
-            S3_REGION: ""
-            PARALLEL_BUILD: "false"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "true"
+            BENCH_S3_REMOTE: "false"
+            BENCH_S3_REGION: ""
+            BENCH_PARALLEL_BUILD: "false"
 
           jobs:
             benchmark:
@@ -144,11 +144,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "with-s3-apne2"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "false"
-            S3_REMOTE: "true"
-            S3_REGION: "ap-northeast-2"
-            PARALLEL_BUILD: "false"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "false"
+            BENCH_S3_REMOTE: "true"
+            BENCH_S3_REGION: "ap-northeast-2"
+            BENCH_PARALLEL_BUILD: "false"
 
           jobs:
             benchmark:
@@ -183,11 +183,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "with-s3-usea1"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "false"
-            S3_REMOTE: "true"
-            S3_REGION: "us-east-1"
-            PARALLEL_BUILD: "false"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "false"
+            BENCH_S3_REMOTE: "true"
+            BENCH_S3_REGION: "us-east-1"
+            BENCH_PARALLEL_BUILD: "false"
 
           jobs:
             benchmark:
@@ -222,11 +222,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "parallel-builds"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "false"
-            S3_REMOTE: "false"
-            S3_REGION: ""
-            PARALLEL_BUILD: "true"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "false"
+            BENCH_S3_REMOTE: "false"
+            BENCH_S3_REGION: ""
+            BENCH_PARALLEL_BUILD: "true"
 
           jobs:
             benchmark:
@@ -260,11 +260,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "all-optimizations"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "true"
-            S3_REMOTE: "false"
-            S3_REGION: ""
-            PARALLEL_BUILD: "true"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "true"
+            BENCH_S3_REMOTE: "false"
+            BENCH_S3_REGION: ""
+            BENCH_PARALLEL_BUILD: "true"
 
           jobs:
             benchmark:
@@ -298,11 +298,11 @@ pipelines:
 
           environment_variables:
             CONFIG_NAME: "all-with-s3-apne2"
-            PNPM_CACHE: "true"
-            TURBO_CACHE: "false"
-            S3_REMOTE: "true"
-            S3_REGION: "ap-northeast-2"
-            PARALLEL_BUILD: "true"
+            BENCH_PNPM_CACHE: "true"
+            BENCH_TURBO_CACHE: "false"
+            BENCH_S3_REMOTE: "true"
+            BENCH_S3_REGION: "ap-northeast-2"
+            BENCH_PARALLEL_BUILD: "true"
 
           jobs:
             benchmark:

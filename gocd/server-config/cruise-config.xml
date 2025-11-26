@@ -7,7 +7,7 @@
   </server>
   <config-repos>
     <config-repo id="frontend-v3" pluginId="yaml.config.plugin">
-      <git url="https://github.com/ddcn4-1/frontend-v3" branch="feat/gocd" username="kimhxsong" encryptedPassword="AES:Bs4jQRceupCd1ERqyH8ZAw==:tdISPWDn3flzw613XW3PGc5LuEo6YiULruXn2Zc21E4WHS4Y2Ef65r0pcEUQEi74" />
+      <git url="https://github.com/ddcn4-1/frontend-v3" branch="feat/CLD-32" username="kimhxsong" encryptedPassword="AES:Bs4jQRceupCd1ERqyH8ZAw==:tdISPWDn3flzw613XW3PGc5LuEo6YiULruXn2Zc21E4WHS4Y2Ef65r0pcEUQEi74" />
       <configuration>
         <property>
           <key>file_pattern</key>
