@@ -329,7 +329,7 @@ pipelines:
                     working_directory: ""
 
       - compare-results:
-          fetch_materials: false
+          fetch_materials: true
           keep_artifacts: true
           clean_workspace: true
           approval:
@@ -404,54 +404,5 @@ pipelines:
                 - exec:
                     command: /bin/bash
                     arguments:
-                      - -c
-                      - |
-                        chmod +x all-results/baseline/results/repo/gocd/scripts/compare-results.sh 2>/dev/null || true
-                        bash all-results/baseline/results/repo/gocd/scripts/compare-results.sh || bash -c '
-                        echo "=== Combining Benchmark Results ==="
-                        mkdir -p combined
-                        find all-results -name "*.json" -type f -exec cp {} combined/ \;
-                        ls -la combined/
-
-                        FIRST_FILE=$(find combined -name "*.json" -type f | head -1)
-                        CPU_CORES=$(jq -r ".runner.cpu_cores" "$FIRST_FILE")
-                        CPU_MODEL=$(jq -r ".runner.cpu_model" "$FIRST_FILE")
-                        TOTAL_MEM=$(jq -r ".runner.total_memory" "$FIRST_FILE")
-                        DISK_SPACE=$(jq -r ".runner.disk_space" "$FIRST_FILE")
-
-                        mkdir -p comparison-report
-
-                        echo "# GoCD Benchmark Comparison Report" > comparison-report/report.md
-                        echo "" >> comparison-report/report.md
-                        echo "## Environment" >> comparison-report/report.md
-                        echo "- **Runner**: GoCD Agent" >> comparison-report/report.md
-                        echo "- **CPU**: ${CPU_MODEL}" >> comparison-report/report.md
-                        echo "- **CPU Cores**: ${CPU_CORES}" >> comparison-report/report.md
-                        echo "- **Memory**: ${TOTAL_MEM}" >> comparison-report/report.md
-                        echo "- **Disk**: ${DISK_SPACE}" >> comparison-report/report.md
-                        echo "" >> comparison-report/report.md
-                        echo "## Results" >> comparison-report/report.md
-                        echo "" >> comparison-report/report.md
-                        echo "| Configuration | Setup | Build | Total |" >> comparison-report/report.md
-                        echo "|---------------|-------|-------|-------|" >> comparison-report/report.md
-
-                        for file in combined/*.json; do
-                          NAME=$(jq -r ".benchmark_name" "$file")
-                          SETUP=$(jq -r ".timings.setup_total" "$file")
-                          BUILD=$(jq -r ".timings.build_total" "$file")
-                          TOTAL=$(jq -r ".timings.total" "$file")
-                          echo "| ${NAME} | ${SETUP}s | ${BUILD}s | **${TOTAL}s** |" >> comparison-report/report.md
-                        done
-
-                        cat > comparison-report/summary.json << ENDJSON
-                        {
-                          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-                          "pipeline_counter": "${GO_PIPELINE_COUNTER:-0}",
-                          "results": $(find combined -name "*.json" -type f -exec cat {} \; | jq -s ".")
-                        }
-                        ENDJSON
-
-                        echo "=== Report Generated ==="
-                        cat comparison-report/report.md
-                        '
+                      - repo/gocd/scripts/compare-results.sh
                     working_directory: ""
