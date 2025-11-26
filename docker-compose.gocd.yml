@@ -1,5 +1,6 @@
 services:
   # GoCD Server
+  # 서버는 최소 리소스로 운영 (빌드는 Agent에서 수행)
   gocd-server:
     image: gocd/gocd-server:v24.4.0
     container_name: gocd-server
@@ -8,7 +9,15 @@ services:
       - "8153:8153"  # GoCD Server Web UI
       - "8154:8154"  # GoCD Server HTTPS
     environment:
-      - GOCD_SERVER_JVM_OPTS=-Xmx2048m -Xms1024m
+      - GOCD_SERVER_JVM_OPTS=-Xmx1024m -Xms512m
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
     volumes:
       - gocd-server-data:/godata
       - ./gocd/server-config:/godata/config
@@ -25,6 +34,7 @@ services:
       start_period: 90s
 
   # GoCD Agent (Custom image with Node.js & pnpm)
+  # GitHub Actions ubuntu-latest 스펙에 맞춤: 4 CPU, 16GB RAM, 14GB SSD
   gocd-agent:
     build:
       context: ./gocd
@@ -38,19 +48,32 @@ services:
       # GoCD Agent Configuration
       - GO_SERVER_URL=http://gocd-server:8153/go
       - AGENT_AUTO_REGISTER_KEY=auto-register-key
-      - AGENT_AUTO_REGISTER_RESOURCES=nodejs,pnpm
+      - AGENT_AUTO_REGISTER_RESOURCES=nodejs,pnpm,aws-cli
       - AGENT_AUTO_REGISTER_ENVIRONMENTS=development
-      - AGENT_BOOTSTRAPPER_JVM_ARGS=-Xms128m -Xmx256m
+      # JVM 메모리 설정 (16GB 중 일부 할당)
+      - AGENT_BOOTSTRAPPER_JVM_ARGS=-Xms256m -Xmx512m
 
       # AWS Credentials (로컬 테스트용)
       # 실제 값은 .env 파일이나 호스트 환경변수에서 주입
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
       - AWS_DEFAULT_REGION=ap-northeast-2
+    deploy:
+      resources:
+        # GitHub Actions ubuntu-latest 동일 스펙
+        limits:
+          cpus: '4'
+          memory: 16G
+        reservations:
+          cpus: '2'
+          memory: 8G
     volumes:
       - gocd-agent-data:/godata
       # Mount project for build access
       - .:/workspace
+      # tmpfs for faster build (14GB like GitHub Actions)
+    tmpfs:
+      - /tmp:size=4G
     networks:
       - gocd-network
     depends_on:

@@ -102,30 +102,84 @@ TOTAL                |  375s →  158s | -57.9%     | +217s
 
 Multi Benchmark Comparison 워크플로우는 다음 설정들을 자동으로 실행하고 비교합니다:
 
-| 설정 | Turbo Cache | 병렬 빌드 | 설명 |
-|------|-------------|-----------|------|
-| **baseline** | ❌ | ❌ | 최적화 전 현재 상태 |
-| **with-turbo** | ✅ | ❌ | Turbo 원격 캐싱만 적용 |
-| **parallel-builds** | ❌ | ✅ | 병렬 빌드만 적용 |
-| **all-optimizations** | ✅ | ✅ | 모든 최적화 적용 |
+| 설정 | pnpm Cache | Turbo Local | S3 Remote | Region | 병렬 빌드 | 설명 |
+|------|------------|-------------|-----------|---------|-----------|------|
+| **baseline** | ❌ | ❌ | ❌ | - | ❌ | 완전 클린 빌드 (기준점) |
+| **with-pnpm-cache** | ✅ | ❌ | ❌ | - | ❌ | pnpm 캐시만 적용 |
+| **with-turbo-cache** | ✅ | ✅ | ❌ | - | ❌ | pnpm + Turbo 로컬 캐시 |
+| **with-s3-apne2** | ✅ | ❌ | ✅ | ap-northeast-2 | ❌ | pnpm + S3 원격 캐시 (서울) |
+| **with-s3-usea1** | ✅ | ❌ | ✅ | us-east-1 | ❌ | pnpm + S3 원격 캐시 (버지니아) |
+| **parallel-builds** | ✅ | ❌ | ❌ | - | ✅ | pnpm + 병렬 빌드 |
+| **all-optimizations** | ✅ | ✅ | ❌ | - | ✅ | pnpm + Turbo 로컬 + 병렬 빌드 |
+| **all-with-s3-apne2** | ✅ | ❌ | ✅ | ap-northeast-2 | ✅ | pnpm + S3 원격 + 병렬 빌드 |
 
 ### 설정별 기대 효과
 
 1. **baseline** (기준선)
-   - 최적화 전 현재 빌드 파이프라인의 성능 측정
+   - 완전 클린 빌드 (캐시 없음)
    - 다른 설정과 비교하기 위한 기준점
 
-2. **with-turbo** (Turbo 캐시)
-   - Turbo 원격 캐싱으로 빌드 결과물 재사용
+2. **with-pnpm-cache** (pnpm 캐시)
+   - node_modules 재사용으로 의존성 설치 시간 단축
+   - 기대 개선: Setup 시간 30-50% 단축
+
+3. **with-turbo-cache** (pnpm + Turbo 로컬 캐시)
+   - pnpm 캐시 + Turbo 빌드 결과물 로컬 재사용
    - 기대 개선: 빌드 시간 50-70% 단축
 
-3. **parallel-builds** (병렬 빌드)
-   - client, admin, accounts 앱을 동시에 빌드
+4. **with-s3-apne2 / with-s3-usea1** (pnpm + S3 원격 캐시)
+   - pnpm 캐시 + S3에 저장된 Turbo 빌드 결과물 재사용
+   - Region별 네트워크 지연시간 비교 가능
    - 기대 개선: 빌드 시간 40-60% 단축
+   - Region 영향: ap-northeast-2가 GitHub Actions runner와 더 가까울 경우 더 빠름
 
-4. **all-optimizations** (전체 최적화)
-   - Turbo 캐시 + 병렬 빌드 조합
-   - 기대 개선: 빌드 시간 60-80% 단축
+5. **parallel-builds** (pnpm + 병렬 빌드)
+   - pnpm 캐시 + client, admin, accounts 동시 빌드
+   - 기대 개선: 빌드 시간 30-50% 단축
+
+6. **all-optimizations** (전체 최적화 - 로컬 캐시)
+   - pnpm + Turbo 로컬 캐시 + 병렬 빌드 조합
+   - 기대 개선: 전체 시간 60-80% 단축
+
+7. **all-with-s3-apne2** (전체 최적화 - S3 원격 캐시)
+   - pnpm + S3 원격 캐시 + 병렬 빌드 조합
+   - 팀 간 빌드 캐시 공유 가능
+   - 기대 개선: 전체 시간 55-75% 단축
+
+## ☁️ S3 Remote Cache 설정 방법
+
+S3 원격 캐시를 사용하려면 다음과 같이 설정해야 합니다:
+
+### 1. S3 Bucket 생성
+
+```bash
+# ap-northeast-2 (서울) region에 bucket 생성
+aws s3 mb s3://turbo-cache-ap-northeast-2 --region ap-northeast-2
+
+# us-east-1 (버지니아) region에 bucket 생성
+aws s3 mb s3://turbo-cache-us-east-1 --region us-east-1
+```
+
+### 2. GitHub Secrets 설정
+
+GitHub CLI를 사용하여 AWS 자격증명을 설정합니다:
+
+```bash
+# AWS 자격증명 설정
+gh secret set AWS_ACCESS_KEY_ID --body "your-access-key-id"
+gh secret set AWS_SECRET_ACCESS_KEY --body "your-secret-access-key"
+```
+
+### 3. 벤치마크 실행
+
+설정이 완료되면 `cache-only` 또는 `all` 설정으로 벤치마크를 실행하여 S3 원격 캐시 성능을 측정할 수 있습니다.
+
+### 4. Region 비교 분석
+
+리포트에서 자동으로 다음 정보를 제공합니다:
+- ap-northeast-2 vs us-east-1 성능 비교
+- 네트워크 지연시간 영향 분석
+- 최적 region 추천
 
 ## 📁 파일 구조
 

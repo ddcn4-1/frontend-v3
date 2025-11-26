@@ -1,0 +1,1246 @@
+format_version: 10
+pipelines:
+  benchmark-comparison:
+    group: benchmarks
+    label_template: "benchmark-${COUNT}"
+    lock_behavior: unlockWhenFinished
+
+    parameters:
+      CONFIGURATIONS: "all"
+      RUN_COUNT: "3"
+
+    materials:
+      git:
+        git: https://github.com/ddcn4-1/frontend-v3.git
+        branch: feat/CLD-32
+        destination: repo
+
+    environment_variables:
+      AWS_REGION: "ap-northeast-2"
+      NODE_VERSION: "22"
+      PNPM_VERSION: "9.15.0"
+
+    secure_variables:
+      AWS_ACCESS_KEY_ID: "AQICAHg..."
+      AWS_SECRET_ACCESS_KEY: "AQICAHg..."
+
+    stages:
+      # Stage 1: Baseline (no cache, sequential)
+      - baseline:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: true
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "baseline"
+            PNPM_CACHE: "false"
+            TURBO_CACHE: "false"
+            S3_REMOTE: "false"
+            S3_REGION: ""
+            PARALLEL_BUILD: "false"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        # Record start time
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+                        echo "Start: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+
+                        # Collect runner specs
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        echo "Runner Specs: ${CPU_CORES} cores, ${TOTAL_MEMORY} RAM, ${DISK_SPACE} disk"
+
+                        # Setup pnpm
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        # Install dependencies (no cache for baseline)
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        # Build apps sequentially
+                        CLIENT_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/client
+                        CLIENT_END=$(date +%s%3N)
+                        CLIENT_TIME=$(echo "scale=2; ($CLIENT_END - $CLIENT_START) / 1000" | bc)
+
+                        ADMIN_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/admin
+                        ADMIN_END=$(date +%s%3N)
+                        ADMIN_TIME=$(echo "scale=2; ($ADMIN_END - $ADMIN_START) / 1000" | bc)
+
+                        ACCOUNTS_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/accounts
+                        ACCOUNTS_END=$(date +%s%3N)
+                        ACCOUNTS_TIME=$(echo "scale=2; ($ACCOUNTS_END - $ACCOUNTS_START) / 1000" | bc)
+
+                        # Calculate totals
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+                        BUILD_TOTAL=$(echo "scale=2; $CLIENT_TIME + $ADMIN_TIME + $ACCOUNTS_TIME" | bc)
+
+                        # Save results
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${CLIENT_TIME},
+                            "admin_build": ${ADMIN_TIME},
+                            "accounts_build": ${ACCOUNTS_TIME},
+                            "build_total": ${BUILD_TOTAL},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "=== Results ==="
+                        echo "Setup: ${SETUP_TOTAL}s (pnpm: ${PNPM_TIME}s, deps: ${DEPS_TIME}s)"
+                        echo "Build: ${BUILD_TOTAL}s (client: ${CLIENT_TIME}s, admin: ${ADMIN_TIME}s, accounts: ${ACCOUNTS_TIME}s)"
+                        echo "Total: ${TOTAL_TIME}s"
+
+      # Stage 2: With pnpm cache
+      - with-pnpm-cache:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "with-pnpm-cache"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "false"
+            S3_REMOTE: "false"
+            S3_REGION: ""
+            PARALLEL_BUILD: "false"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        # With cache - pnpm store should be warm
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        CLIENT_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/client
+                        CLIENT_END=$(date +%s%3N)
+                        CLIENT_TIME=$(echo "scale=2; ($CLIENT_END - $CLIENT_START) / 1000" | bc)
+
+                        ADMIN_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/admin
+                        ADMIN_END=$(date +%s%3N)
+                        ADMIN_TIME=$(echo "scale=2; ($ADMIN_END - $ADMIN_START) / 1000" | bc)
+
+                        ACCOUNTS_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/accounts
+                        ACCOUNTS_END=$(date +%s%3N)
+                        ACCOUNTS_TIME=$(echo "scale=2; ($ACCOUNTS_END - $ACCOUNTS_START) / 1000" | bc)
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+                        BUILD_TOTAL=$(echo "scale=2; $CLIENT_TIME + $ADMIN_TIME + $ACCOUNTS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${CLIENT_TIME},
+                            "admin_build": ${ADMIN_TIME},
+                            "accounts_build": ${ACCOUNTS_TIME},
+                            "build_total": ${BUILD_TOTAL},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build: ${BUILD_TOTAL}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 3: With Turbo cache
+      - with-turbo-cache:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "with-turbo-cache"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "true"
+            S3_REMOTE: "false"
+            S3_REGION: ""
+            PARALLEL_BUILD: "false"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        # Note: Turbo cache (.turbo directory) persists between runs
+
+                        CLIENT_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/client
+                        CLIENT_END=$(date +%s%3N)
+                        CLIENT_TIME=$(echo "scale=2; ($CLIENT_END - $CLIENT_START) / 1000" | bc)
+
+                        ADMIN_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/admin
+                        ADMIN_END=$(date +%s%3N)
+                        ADMIN_TIME=$(echo "scale=2; ($ADMIN_END - $ADMIN_START) / 1000" | bc)
+
+                        ACCOUNTS_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/accounts
+                        ACCOUNTS_END=$(date +%s%3N)
+                        ACCOUNTS_TIME=$(echo "scale=2; ($ACCOUNTS_END - $ACCOUNTS_START) / 1000" | bc)
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+                        BUILD_TOTAL=$(echo "scale=2; $CLIENT_TIME + $ADMIN_TIME + $ACCOUNTS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${CLIENT_TIME},
+                            "admin_build": ${ADMIN_TIME},
+                            "accounts_build": ${ACCOUNTS_TIME},
+                            "build_total": ${BUILD_TOTAL},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build: ${BUILD_TOTAL}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 4: With S3 remote cache (ap-northeast-2)
+      - with-s3-apne2:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "with-s3-apne2"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "false"
+            S3_REMOTE: "true"
+            S3_REGION: "ap-northeast-2"
+            PARALLEL_BUILD: "false"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+                - aws-cli
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+                        echo "S3 Region: ${S3_REGION}"
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        # Start S3 cache server
+                        CACHE_BUCKET="turbo-cache-${S3_REGION}"
+                        PORT=8080 \
+                        AWS_REGION=${S3_REGION} \
+                        S3_BUCKET=$CACHE_BUCKET \
+                        node scripts/turbo-s3-cache-server.js > /tmp/cache-server.log 2>&1 &
+                        CACHE_PID=$!
+
+                        sleep 3
+                        curl -f http://localhost:8080/v8/artifacts/status || (cat /tmp/cache-server.log && exit 1)
+
+                        export TURBO_API=http://localhost:8080
+                        export TURBO_TOKEN=no-token
+                        export TURBO_TEAM=no-team
+
+                        echo "S3 cache server started (PID: $CACHE_PID)"
+
+                        CLIENT_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/client
+                        CLIENT_END=$(date +%s%3N)
+                        CLIENT_TIME=$(echo "scale=2; ($CLIENT_END - $CLIENT_START) / 1000" | bc)
+
+                        ADMIN_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/admin
+                        ADMIN_END=$(date +%s%3N)
+                        ADMIN_TIME=$(echo "scale=2; ($ADMIN_END - $ADMIN_START) / 1000" | bc)
+
+                        ACCOUNTS_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/accounts
+                        ACCOUNTS_END=$(date +%s%3N)
+                        ACCOUNTS_TIME=$(echo "scale=2; ($ACCOUNTS_END - $ACCOUNTS_START) / 1000" | bc)
+
+                        # Stop cache server
+                        kill $CACHE_PID 2>/dev/null || true
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+                        BUILD_TOTAL=$(echo "scale=2; $CLIENT_TIME + $ADMIN_TIME + $ACCOUNTS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${CLIENT_TIME},
+                            "admin_build": ${ADMIN_TIME},
+                            "accounts_build": ${ACCOUNTS_TIME},
+                            "build_total": ${BUILD_TOTAL},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build: ${BUILD_TOTAL}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 5: With S3 remote cache (us-east-1)
+      - with-s3-usea1:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "with-s3-usea1"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "false"
+            S3_REMOTE: "true"
+            S3_REGION: "us-east-1"
+            PARALLEL_BUILD: "false"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+                - aws-cli
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+                        echo "S3 Region: ${S3_REGION}"
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        # Start S3 cache server
+                        CACHE_BUCKET="turbo-cache-${S3_REGION}"
+                        PORT=8080 \
+                        AWS_REGION=${S3_REGION} \
+                        S3_BUCKET=$CACHE_BUCKET \
+                        node scripts/turbo-s3-cache-server.js > /tmp/cache-server.log 2>&1 &
+                        CACHE_PID=$!
+
+                        sleep 3
+                        curl -f http://localhost:8080/v8/artifacts/status || (cat /tmp/cache-server.log && exit 1)
+
+                        export TURBO_API=http://localhost:8080
+                        export TURBO_TOKEN=no-token
+                        export TURBO_TEAM=no-team
+
+                        echo "S3 cache server started (PID: $CACHE_PID)"
+
+                        CLIENT_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/client
+                        CLIENT_END=$(date +%s%3N)
+                        CLIENT_TIME=$(echo "scale=2; ($CLIENT_END - $CLIENT_START) / 1000" | bc)
+
+                        ADMIN_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/admin
+                        ADMIN_END=$(date +%s%3N)
+                        ADMIN_TIME=$(echo "scale=2; ($ADMIN_END - $ADMIN_START) / 1000" | bc)
+
+                        ACCOUNTS_START=$(date +%s%3N)
+                        pnpm run build --filter=@apps/accounts
+                        ACCOUNTS_END=$(date +%s%3N)
+                        ACCOUNTS_TIME=$(echo "scale=2; ($ACCOUNTS_END - $ACCOUNTS_START) / 1000" | bc)
+
+                        # Stop cache server
+                        kill $CACHE_PID 2>/dev/null || true
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+                        BUILD_TOTAL=$(echo "scale=2; $CLIENT_TIME + $ADMIN_TIME + $ACCOUNTS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${CLIENT_TIME},
+                            "admin_build": ${ADMIN_TIME},
+                            "accounts_build": ${ACCOUNTS_TIME},
+                            "build_total": ${BUILD_TOTAL},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build: ${BUILD_TOTAL}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 6: Parallel builds
+      - parallel-builds:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "parallel-builds"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "false"
+            S3_REMOTE: "false"
+            S3_REGION: ""
+            PARALLEL_BUILD: "true"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        # Parallel builds
+                        BUILD_START=$(date +%s%3N)
+
+                        pnpm run build --filter=@apps/client > /tmp/client.log 2>&1 &
+                        CLIENT_PID=$!
+
+                        pnpm run build --filter=@apps/admin > /tmp/admin.log 2>&1 &
+                        ADMIN_PID=$!
+
+                        pnpm run build --filter=@apps/accounts > /tmp/accounts.log 2>&1 &
+                        ACCOUNTS_PID=$!
+
+                        wait $CLIENT_PID || (cat /tmp/client.log && exit 1)
+                        wait $ADMIN_PID || (cat /tmp/admin.log && exit 1)
+                        wait $ACCOUNTS_PID || (cat /tmp/accounts.log && exit 1)
+
+                        BUILD_END=$(date +%s%3N)
+                        BUILD_TIME=$(echo "scale=2; ($BUILD_END - $BUILD_START) / 1000" | bc)
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${BUILD_TIME},
+                            "admin_build": ${BUILD_TIME},
+                            "accounts_build": ${BUILD_TIME},
+                            "build_total": ${BUILD_TIME},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build (parallel): ${BUILD_TIME}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 7: All optimizations (turbo cache + parallel)
+      - all-optimizations:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "all-optimizations"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "true"
+            S3_REMOTE: "false"
+            S3_REGION: ""
+            PARALLEL_BUILD: "true"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        BUILD_START=$(date +%s%3N)
+
+                        pnpm run build --filter=@apps/client > /tmp/client.log 2>&1 &
+                        CLIENT_PID=$!
+
+                        pnpm run build --filter=@apps/admin > /tmp/admin.log 2>&1 &
+                        ADMIN_PID=$!
+
+                        pnpm run build --filter=@apps/accounts > /tmp/accounts.log 2>&1 &
+                        ACCOUNTS_PID=$!
+
+                        wait $CLIENT_PID || (cat /tmp/client.log && exit 1)
+                        wait $ADMIN_PID || (cat /tmp/admin.log && exit 1)
+                        wait $ACCOUNTS_PID || (cat /tmp/accounts.log && exit 1)
+
+                        BUILD_END=$(date +%s%3N)
+                        BUILD_TIME=$(echo "scale=2; ($BUILD_END - $BUILD_START) / 1000" | bc)
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${BUILD_TIME},
+                            "admin_build": ${BUILD_TIME},
+                            "accounts_build": ${BUILD_TIME},
+                            "build_total": ${BUILD_TIME},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build (parallel): ${BUILD_TIME}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 8: All with S3 (ap-northeast-2) + parallel
+      - all-with-s3-apne2:
+          fetch_materials: true
+          keep_artifacts: true
+          clean_workspace: false
+          approval:
+            type: success
+
+          environment_variables:
+            CONFIG_NAME: "all-with-s3-apne2"
+            PNPM_CACHE: "true"
+            TURBO_CACHE: "false"
+            S3_REMOTE: "true"
+            S3_REGION: "ap-northeast-2"
+            PARALLEL_BUILD: "true"
+
+          jobs:
+            benchmark:
+              timeout: 30
+              resources:
+                - nodejs
+                - pnpm
+                - aws-cli
+              artifacts:
+                - build:
+                    source: repo/benchmark-results
+                    destination: results
+              tasks:
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+                        cd repo
+
+                        START_TIME=$(date +%s%3N)
+                        echo "=== Benchmark: ${CONFIG_NAME} ==="
+                        echo "S3 Region: ${S3_REGION}, Parallel: true"
+
+                        CPU_CORES=$(nproc)
+                        CPU_MODEL=$(lscpu | grep 'Model name:' | cut -d: -f2 | xargs)
+                        TOTAL_MEMORY=$(free -h | awk '/^Mem:/ {print $2}')
+                        DISK_SPACE=$(df -h / | awk 'NR==2 {print $4}')
+
+                        PNPM_START=$(date +%s%3N)
+                        corepack enable
+                        corepack prepare pnpm@${PNPM_VERSION} --activate
+                        PNPM_END=$(date +%s%3N)
+                        PNPM_TIME=$(echo "scale=2; ($PNPM_END - $PNPM_START) / 1000" | bc)
+
+                        DEPS_START=$(date +%s%3N)
+                        pnpm install --frozen-lockfile
+                        DEPS_END=$(date +%s%3N)
+                        DEPS_TIME=$(echo "scale=2; ($DEPS_END - $DEPS_START) / 1000" | bc)
+
+                        # Start S3 cache server
+                        CACHE_BUCKET="turbo-cache-${S3_REGION}"
+                        PORT=8080 \
+                        AWS_REGION=${S3_REGION} \
+                        S3_BUCKET=$CACHE_BUCKET \
+                        node scripts/turbo-s3-cache-server.js > /tmp/cache-server.log 2>&1 &
+                        CACHE_PID=$!
+
+                        sleep 3
+                        curl -f http://localhost:8080/v8/artifacts/status || (cat /tmp/cache-server.log && exit 1)
+
+                        export TURBO_API=http://localhost:8080
+                        export TURBO_TOKEN=no-token
+                        export TURBO_TEAM=no-team
+
+                        echo "S3 cache server started (PID: $CACHE_PID)"
+
+                        # Parallel builds with S3 remote cache
+                        BUILD_START=$(date +%s%3N)
+
+                        pnpm run build --filter=@apps/client > /tmp/client.log 2>&1 &
+                        CLIENT_PID=$!
+
+                        pnpm run build --filter=@apps/admin > /tmp/admin.log 2>&1 &
+                        ADMIN_PID=$!
+
+                        pnpm run build --filter=@apps/accounts > /tmp/accounts.log 2>&1 &
+                        ACCOUNTS_PID=$!
+
+                        wait $CLIENT_PID || (cat /tmp/client.log && exit 1)
+                        wait $ADMIN_PID || (cat /tmp/admin.log && exit 1)
+                        wait $ACCOUNTS_PID || (cat /tmp/accounts.log && exit 1)
+
+                        BUILD_END=$(date +%s%3N)
+                        BUILD_TIME=$(echo "scale=2; ($BUILD_END - $BUILD_START) / 1000" | bc)
+
+                        # Stop cache server
+                        kill $CACHE_PID 2>/dev/null || true
+
+                        END_TIME=$(date +%s%3N)
+                        TOTAL_TIME=$(echo "scale=2; ($END_TIME - $START_TIME) / 1000" | bc)
+                        SETUP_TOTAL=$(echo "scale=2; $PNPM_TIME + $DEPS_TIME" | bc)
+
+                        mkdir -p benchmark-results
+                        cat > benchmark-results/${CONFIG_NAME}.json << EOF
+                        {
+                          "benchmark_name": "${CONFIG_NAME}",
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "configuration": {
+                            "pnpm_cache": ${PNPM_CACHE},
+                            "turbo_cache": ${TURBO_CACHE},
+                            "s3_remote": ${S3_REMOTE},
+                            "s3_region": "${S3_REGION}",
+                            "parallel_build": ${PARALLEL_BUILD}
+                          },
+                          "runner": {
+                            "os": "gocd-agent",
+                            "node_version": "${NODE_VERSION}",
+                            "pnpm_version": "${PNPM_VERSION}",
+                            "cpu_cores": "${CPU_CORES}",
+                            "cpu_model": "${CPU_MODEL}",
+                            "total_memory": "${TOTAL_MEMORY}",
+                            "disk_space": "${DISK_SPACE}"
+                          },
+                          "timings": {
+                            "pnpm_setup": ${PNPM_TIME},
+                            "dependencies": ${DEPS_TIME},
+                            "setup_total": ${SETUP_TOTAL},
+                            "client_build": ${BUILD_TIME},
+                            "admin_build": ${BUILD_TIME},
+                            "accounts_build": ${BUILD_TIME},
+                            "build_total": ${BUILD_TIME},
+                            "total": ${TOTAL_TIME}
+                          },
+                          "gocd_pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "gocd_stage_counter": "${GO_STAGE_COUNTER}"
+                        }
+                        EOF
+
+                        echo "Setup: ${SETUP_TOTAL}s, Build (parallel): ${BUILD_TIME}s, Total: ${TOTAL_TIME}s"
+
+      # Stage 9: Compare results
+      - compare-results:
+          fetch_materials: false
+          keep_artifacts: true
+          clean_workspace: true
+          approval:
+            type: success
+
+          jobs:
+            analyze:
+              timeout: 10
+              resources:
+                - nodejs
+              artifacts:
+                - build:
+                    source: comparison-report
+                    destination: report
+              tasks:
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: baseline
+                    job: benchmark
+                    source: results
+                    destination: all-results/baseline
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: with-pnpm-cache
+                    job: benchmark
+                    source: results
+                    destination: all-results/with-pnpm-cache
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: with-turbo-cache
+                    job: benchmark
+                    source: results
+                    destination: all-results/with-turbo-cache
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: with-s3-apne2
+                    job: benchmark
+                    source: results
+                    destination: all-results/with-s3-apne2
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: with-s3-usea1
+                    job: benchmark
+                    source: results
+                    destination: all-results/with-s3-usea1
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: parallel-builds
+                    job: benchmark
+                    source: results
+                    destination: all-results/parallel-builds
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: all-optimizations
+                    job: benchmark
+                    source: results
+                    destination: all-results/all-optimizations
+
+                - fetch:
+                    pipeline: benchmark-comparison
+                    stage: all-with-s3-apne2
+                    job: benchmark
+                    source: results
+                    destination: all-results/all-with-s3-apne2
+
+                - exec:
+                    command: /bin/bash
+                    arguments:
+                      - -c
+                      - |
+                        set -e
+
+                        echo "=== Combining Benchmark Results ==="
+
+                        # Collect all JSON files
+                        mkdir -p combined
+                        find all-results -name "*.json" -type f -exec cp {} combined/ \;
+
+                        ls -la combined/
+
+                        # Get runner specs from first result
+                        FIRST_FILE=$(find combined -name "*.json" -type f | head -1)
+                        CPU_CORES=$(jq -r '.runner.cpu_cores' "$FIRST_FILE")
+                        CPU_MODEL=$(jq -r '.runner.cpu_model' "$FIRST_FILE")
+                        TOTAL_MEM=$(jq -r '.runner.total_memory' "$FIRST_FILE")
+                        DISK_SPACE=$(jq -r '.runner.disk_space' "$FIRST_FILE")
+
+                        mkdir -p comparison-report
+
+                        # Generate report
+                        cat > comparison-report/report.md << EOF
+                        # GoCD Benchmark Comparison Report
+
+                        ## Environment
+                        - **Runner**: GoCD Agent
+                        - **CPU**: ${CPU_MODEL}
+                        - **CPU Cores**: ${CPU_CORES}
+                        - **Memory**: ${TOTAL_MEM}
+                        - **Disk**: ${DISK_SPACE}
+                        - **Pipeline Counter**: ${GO_PIPELINE_COUNTER}
+
+                        ## Configuration Comparison
+
+                        | Configuration | Cache Config | Build Mode | Setup | Build | Total |
+                        |---------------|--------------|------------|-------|-------|-------|
+                        EOF
+
+                        for file in combined/*.json; do
+                          NAME=$(jq -r '.benchmark_name' "$file")
+                          PNPM=$(jq -r '.configuration.pnpm_cache' "$file")
+                          TURBO=$(jq -r '.configuration.turbo_cache' "$file")
+                          S3=$(jq -r '.configuration.s3_remote' "$file")
+                          S3_REGION=$(jq -r '.configuration.s3_region' "$file")
+                          PARALLEL=$(jq -r '.configuration.parallel_build' "$file")
+                          SETUP=$(jq -r '.timings.setup_total' "$file")
+                          BUILD=$(jq -r '.timings.build_total' "$file")
+                          TOTAL=$(jq -r '.timings.total' "$file")
+
+                          CACHE_CONFIG=""
+                          [ "$PNPM" = "true" ] && CACHE_CONFIG="${CACHE_CONFIG}pnpm "
+                          [ "$TURBO" = "true" ] && CACHE_CONFIG="${CACHE_CONFIG}turbo "
+                          if [ "$S3" = "true" ] && [ -n "$S3_REGION" ] && [ "$S3_REGION" != "null" ]; then
+                            CACHE_CONFIG="${CACHE_CONFIG}S3-${S3_REGION} "
+                          fi
+                          [ -z "$CACHE_CONFIG" ] && CACHE_CONFIG="none"
+
+                          BUILD_MODE=$( [ "$PARALLEL" = "true" ] && echo "parallel" || echo "sequential" )
+
+                          echo "| ${NAME} | ${CACHE_CONFIG} | ${BUILD_MODE} | ${SETUP}s | ${BUILD}s | **${TOTAL}s** |" >> comparison-report/report.md
+                        done
+
+                        # Find baseline for comparison
+                        BASELINE_FILE=$(find combined -name "baseline.json" -type f | head -1)
+
+                        if [ -n "$BASELINE_FILE" ]; then
+                          BASELINE_TOTAL=$(jq -r '.timings.total' "$BASELINE_FILE")
+
+                          echo "" >> comparison-report/report.md
+                          echo "## Performance vs Baseline" >> comparison-report/report.md
+                          echo "" >> comparison-report/report.md
+                          echo "| Configuration | Total | Improvement | Time Saved |" >> comparison-report/report.md
+                          echo "|---------------|-------|-------------|------------|" >> comparison-report/report.md
+
+                          for file in combined/*.json; do
+                            NAME=$(jq -r '.benchmark_name' "$file")
+                            TOTAL=$(jq -r '.timings.total' "$file")
+
+                            if [ "$NAME" = "baseline" ]; then
+                              echo "| ${NAME} | ${TOTAL}s | - | - |" >> comparison-report/report.md
+                            else
+                              IMPROVEMENT=$(echo "scale=1; (($BASELINE_TOTAL - $TOTAL) / $BASELINE_TOTAL) * 100" | bc)
+                              TIME_SAVED=$(echo "scale=2; $BASELINE_TOTAL - $TOTAL" | bc)
+                              echo "| ${NAME} | ${TOTAL}s | ${IMPROVEMENT}% | ${TIME_SAVED}s |" >> comparison-report/report.md
+                            fi
+                          done
+
+                          # Find best configuration
+                          BEST_TIME=$(find combined -name "*.json" -type f -exec jq -r '.timings.total' {} + | sort -n | head -1)
+                          BEST_CONFIG=$(find combined -name "*.json" -type f | while read f; do
+                            if [ "$(jq -r .timings.total "$f")" = "$BEST_TIME" ]; then
+                              jq -r .benchmark_name "$f"
+                              break
+                            fi
+                          done)
+
+                          BEST_IMPROVEMENT=$(echo "scale=1; (($BASELINE_TOTAL - $BEST_TIME) / $BASELINE_TOTAL) * 100" | bc)
+
+                          echo "" >> comparison-report/report.md
+                          echo "## Summary" >> comparison-report/report.md
+                          echo "" >> comparison-report/report.md
+                          echo "**Best Configuration**: \`${BEST_CONFIG}\` (${BEST_TIME}s)" >> comparison-report/report.md
+                          echo "" >> comparison-report/report.md
+                          echo "**Improvement**: ${BEST_IMPROVEMENT}% faster than baseline" >> comparison-report/report.md
+
+                          # S3 region comparison
+                          APNE2_FILE=$(find combined -name "with-s3-apne2.json" -type f | head -1)
+                          USEA1_FILE=$(find combined -name "with-s3-usea1.json" -type f | head -1)
+
+                          if [ -n "$APNE2_FILE" ] && [ -n "$USEA1_FILE" ]; then
+                            APNE2_TIME=$(jq -r '.timings.total' "$APNE2_FILE")
+                            USEA1_TIME=$(jq -r '.timings.total' "$USEA1_FILE")
+                            REGION_DIFF=$(echo "scale=1; (($USEA1_TIME - $APNE2_TIME) / $APNE2_TIME) * 100" | bc)
+
+                            echo "" >> comparison-report/report.md
+                            echo "### S3 Region Comparison" >> comparison-report/report.md
+                            echo "" >> comparison-report/report.md
+                            echo "- **ap-northeast-2**: ${APNE2_TIME}s" >> comparison-report/report.md
+                            echo "- **us-east-1**: ${USEA1_TIME}s" >> comparison-report/report.md
+                            echo "- **Difference**: ${REGION_DIFF}%" >> comparison-report/report.md
+                          fi
+
+                          # Visual comparison
+                          echo "" >> comparison-report/report.md
+                          echo "### Visual Performance Comparison" >> comparison-report/report.md
+                          echo "" >> comparison-report/report.md
+                          echo "\`\`\`" >> comparison-report/report.md
+                          echo "Relative Performance (lower is better):" >> comparison-report/report.md
+                          echo "" >> comparison-report/report.md
+
+                          for file in combined/*.json; do
+                            NAME=$(jq -r '.benchmark_name' "$file")
+                            TOTAL=$(jq -r '.timings.total' "$file")
+
+                            PERCENT=$(echo "scale=2; $TOTAL * 100 / $BASELINE_TOTAL" | bc | cut -d. -f1)
+                            BAR_LENGTH=$((PERCENT / 2))
+                            BAR=$(printf '%*s' "$BAR_LENGTH" | tr ' ' '█')
+
+                            printf "%-25s %3d%% %s\n" "$NAME" "$PERCENT" "$BAR" >> comparison-report/report.md
+                          done
+
+                          echo "\`\`\`" >> comparison-report/report.md
+                        fi
+
+                        # Save combined JSON
+                        cat > comparison-report/summary.json << EOF
+                        {
+                          "timestamp": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+                          "pipeline_counter": "${GO_PIPELINE_COUNTER}",
+                          "results": $(find combined -name "*.json" -type f -exec cat {} \; | jq -s '.')
+                        }
+                        EOF
+
+                        echo "=== Report Generated ==="
+                        cat comparison-report/report.md
